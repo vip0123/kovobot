@@ -38,6 +38,8 @@ export interface Config {
   signUpOpen: boolean;
   /** Origin of the landing page, allowed to post leads to the API. Null when there is none. */
   landingUrl: string | null;
+  /** Our OpenAI key (the Operator's, when self-hosted). Null leaves OpenAI models unavailable. */
+  openaiApiKey: string | null;
 }
 
 /** Every problem found in the environment, so they can all be fixed in one go. */
@@ -209,7 +211,11 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
     webDistDir,
     signUpOpen: booleanSetting("SIGN_UP_OPEN", !hosted),
     landingUrl: optionalOrigin("LANDING_URL"),
+    openaiApiKey: read("OPENAI_API_KEY") ?? null,
   };
+  if (!config.openaiApiKey) {
+    warnings.push("OPENAI_API_KEY is not set: Bots can't reply until a Model provider key is added.");
+  }
 
   if (problems.length > 0) throw new ConfigError(problems);
   return { config, warnings };

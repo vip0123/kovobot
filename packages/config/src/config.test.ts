@@ -88,6 +88,7 @@ describe("self-hosted defaults", () => {
     expect(warnings).toEqual([
       expect.stringMatching(/^SESSION_SECRET is not set/),
       expect.stringMatching(/^SMTP_HOST is not set/),
+      expect.stringMatching(/^OPENAI_API_KEY is not set/),
     ]);
   });
 
@@ -153,5 +154,14 @@ describe("sign-up and the landing page", () => {
   test("the landing page's origin is read from LANDING_URL, and is optional", () => {
     expect(loadConfig({}).config.landingUrl).toBeNull();
     expect(loadConfig({ LANDING_URL: "https://kovobot.com/" }).config.landingUrl).toBe("https://kovobot.com");
+  });
+});
+
+describe("Model provider keys", () => {
+  test("OPENAI_API_KEY lets Bots use OpenAI models; without it they can't reply, and the server says so", () => {
+    expect(loadConfig({ OPENAI_API_KEY: "sk-test" }).config.openaiApiKey).toBe("sk-test");
+    const { config, warnings } = loadConfig({});
+    expect(config.openaiApiKey).toBeNull();
+    expect(warnings).toContainEqual(expect.stringMatching(/^OPENAI_API_KEY is not set/));
   });
 });

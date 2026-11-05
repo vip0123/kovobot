@@ -3,6 +3,7 @@ import { ConfigError, loadConfig } from "@kovobot/config";
 import { createDb } from "@kovobot/db";
 import { createApp } from "./app.ts";
 import { createMailer } from "./mailer.ts";
+import { createOpenAIAdapter } from "./models/openai.ts";
 
 function configOrExit() {
   try {
@@ -23,6 +24,7 @@ const app = createApp({
   db,
   mailer: createMailer(config.email),
   fetch: globalThis.fetch,
+  models: { openai: config.openaiApiKey ? createOpenAIAdapter({ apiKey: config.openaiApiKey }) : null },
   now: () => new Date(),
 });
 

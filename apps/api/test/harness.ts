@@ -1,18 +1,38 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, expect, inject } from "vitest";
+import { afterAll, beforeAll, expect, inject } from "vitest";
 import { loadConfig, type Env } from "@kovobot/config";
 import { createDb } from "@kovobot/db";
 import { type AppDeps, createApp } from "../src/app.ts";
 import type { Email } from "../src/mailer.ts";
+import type { ModelAdapter, ModelAdapters } from "../src/models/adapter.ts";
+import { createOpenAIAdapter } from "../src/models/openai.ts";
 import { FakeGoogle, type FakeGoogleAccount } from "./fake-google.ts";
+import { FAKE_OPENAI_KEY, FakeOpenAI } from "./fake-openai.ts";
 
 /**
  * The API wired to the real, migrated test database. Only the edges are fake:
- * email lands in `outbox`, Google is `google`, and the clock is set by hand.
+ * email lands in `outbox`, Google is `google`, OpenAI is `openai` (a local
+ * server the real SDK talks to), and the clock is set by hand.
  */
-export function startTestServer(env: Env = {}) {
+export function startTestServer(env: Env = {}, options: { openai?: boolean } = {}) {
   const db = createDb(inject("databaseUrl"));
   afterAll(() => db.end());
+  const openai = new FakeOpenAI();
+  beforeAll(() => openai.start());
+  afterAll(() => openai.stop());
+  // The fake's address is known only once it listens, so the adapter is made on first use.
+  let openaiAdapter: ModelAdapter | undefined;
+  const models: ModelAdapters = {
+    openai:
+      options.openai === false
+        ? null
+        : {
+            stream: (request) =>
+              (openaiAdapter ??= createOpenAIAdapter({ apiKey: FAKE_OPENAI_KEY, baseURL: openai.baseUrl })).stream(
+                request,
+              ),
+          },
+  };
 
   const { config } = loadConfig({
     DATABASE_URL: inject("databaseUrl"),
@@ -36,6 +56,7 @@ export function startTestServer(env: Env = {}) {
     db,
     mailer: { send: async (email) => void outbox.push(email) },
     fetch: google.fetch,
+    models,
     now: () => clock.now,
   };
   const app = createApp(deps);
@@ -47,6 +68,7 @@ export function startTestServer(env: Env = {}) {
     outbox,
     clock,
     google,
+    openai,
     /** A fresh browser: its own cookies, and the web app's Origin on every request. */
     browser: () => new Browser(app, config.appUrl),
     lastEmailTo,
@@ -85,6 +107,23 @@ export async function currentCustomer(browser: Browser): Promise<{ id: string; e
 
 export function uniqueEmail(): string {
   return `ada.${randomUUID().slice(0, 8)}@example.com`;
+}
+
+/** The server-sent events in a streamed response, in order. */
+export async function serverSentEvents(response: Response): Promise<Array<{ event: string; data: unknown }>> {
+  const text = await response.text();
+  return text
+    .split(/\r?\n\r?\n/)
+    .filter((block) => block.trim() !== "")
+    .map((block) => {
+      const lines = block.split(/\r?\n/);
+      const event = lines.find((line) => line.startsWith("event:"))?.slice(6).trim() ?? "message";
+      const data = lines
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .join("\n");
+      return { event, data: data ? JSON.parse(data) : null };
+    });
 }
 
 /** A Google Workspace account on example.com: Google vouches that its owner owns the address. */

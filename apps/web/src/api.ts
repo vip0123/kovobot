@@ -5,6 +5,28 @@ export interface Customer {
   email: string;
 }
 
+export interface Bot {
+  id: string;
+  name: string;
+  model: string;
+  createdAt: string;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+  /** False when no key for its Model provider is set up here. */
+  available: boolean;
+}
+
+export interface Message {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+}
+
 /** An error answer from the API: its machine-readable code and a sentence to show. */
 export class ApiError extends Error {
   readonly status: number;
@@ -17,7 +39,9 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: { method?: "GET" | "POST"; json?: unknown } = {}): Promise<T> {
+type Method = "GET" | "POST" | "PATCH" | "DELETE";
+
+async function send(path: string, init: { method?: Method; json?: unknown } = {}): Promise<Response> {
   let response: Response;
   try {
     response = await fetch(`/api${path}`, {
@@ -28,14 +52,20 @@ async function request<T>(path: string, init: { method?: "GET" | "POST"; json?: 
   } catch {
     throw new ApiError(0, "offline", "Can't reach Kovobot. Check your connection and try again.");
   }
-  const body: unknown = response.headers.get("content-type")?.includes("application/json")
-    ? await response.json()
-    : undefined;
   if (!response.ok) {
-    const error = (body as { error?: { code?: string; message?: string } } | undefined)?.error;
-    throw new ApiError(response.status, error?.code ?? "unknown", error?.message ?? "Something went wrong. Try again.");
+    const body = (await response.json().catch(() => null)) as { error?: { code?: string; message?: string } } | null;
+    throw new ApiError(
+      response.status,
+      body?.error?.code ?? "unknown",
+      body?.error?.message ?? "Something went wrong. Try again.",
+    );
   }
-  return body as T;
+  return response;
+}
+
+async function request<T>(path: string, init: { method?: Method; json?: unknown } = {}): Promise<T> {
+  const response = await send(path, init);
+  return (response.headers.get("content-type")?.includes("application/json") ? await response.json() : undefined) as T;
 }
 
 /** The sentence to show for anything thrown by an API call. */
@@ -50,7 +80,51 @@ export const api = {
     request<{ customer: Customer }>("/auth/email-link/confirm", { method: "POST", json: { token } }),
   me: () => request<{ customer: Customer }>("/me"),
   signOut: () => request<unknown>("/auth/sign-out", { method: "POST" }),
+
+  models: () => request<{ models: ModelInfo[] }>("/models"),
+  bots: () => request<{ bots: Bot[] }>("/bots"),
+  createBot: (name: string, model: string) => request<{ bot: Bot }>("/bots", { method: "POST", json: { name, model } }),
+  renameBot: (id: string, name: string) => request<{ bot: Bot }>(`/bots/${id}`, { method: "PATCH", json: { name } }),
+  deleteBot: (id: string) => request<unknown>(`/bots/${id}`, { method: "DELETE" }),
+  messages: (botId: string) => request<{ messages: Message[] }>(`/bots/${botId}/messages`),
+
+  /**
+   * Sends a message on the web Channel and streams the Bot's reply: `onText`
+   * gets each piece as the model writes it. Resolves with the saved reply.
+   */
+  async sendMessage(botId: string, content: string, onText: (text: string) => void): Promise<Message> {
+    const response = await send(`/bots/${botId}/messages`, { method: "POST", json: { content } });
+    const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += value.replaceAll("\r\n", "\n");
+      let end: number;
+      while ((end = buffer.indexOf("\n\n")) !== -1) {
+        const event = parseServerSentEvent(buffer.slice(0, end));
+        buffer = buffer.slice(end + 2);
+        if (event.name === "delta") onText((event.data as { text: string }).text);
+        if (event.name === "done") return (event.data as { message: Message }).message;
+        if (event.name === "error") {
+          const error = event.data as { code: string; message: string };
+          throw new ApiError(200, error.code, error.message);
+        }
+      }
+    }
+    throw new ApiError(0, "interrupted", "The reply was cut off. Reload the page to see whether it finished.");
+  },
 };
+
+function parseServerSentEvent(block: string): { name: string; data: unknown } {
+  let name = "message";
+  const data: string[] = [];
+  for (const line of block.split("\n")) {
+    if (line.startsWith("event:")) name = line.slice(6).trim();
+    else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+  }
+  return { name, data: data.length > 0 ? JSON.parse(data.join("\n")) : null };
+}
 
 /** Where "Sign in with Google" starts: a full-page visit, since Google takes over the page. */
 export const GOOGLE_SIGN_IN_URL = "/api/auth/google";

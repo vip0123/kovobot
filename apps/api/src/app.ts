@@ -4,9 +4,11 @@ import { createMiddleware } from "hono/factory";
 import type { Config } from "@kovobot/config";
 import type { Db } from "@kovobot/db";
 import { authRoutes } from "./auth/routes.ts";
+import { botRoutes } from "./bots.ts";
 import { apiError, sameOriginWrites } from "./http.ts";
 import { leadRoutes } from "./leads.ts";
 import type { Mailer } from "./mailer.ts";
+import type { ModelAdapters } from "./models/adapter.ts";
 
 /** Everything the API talks to outside its own code. Tests swap the edges. */
 export interface AppDeps {
@@ -15,6 +17,8 @@ export interface AppDeps {
   mailer: Mailer;
   /** Outgoing HTTP, such as Google's token endpoint. */
   fetch: typeof fetch;
+  /** One adapter per Model provider; null where no key is set. */
+  models: ModelAdapters;
   now: () => Date;
 }
 
@@ -25,6 +29,7 @@ export function createApp(deps: AppDeps) {
   app.route("/api", leadRoutes(deps));
   app.use("/api/*", sameOriginWrites(deps.config.appUrl));
   app.route("/api", authRoutes(deps));
+  app.route("/api", botRoutes(deps));
   app.all("/api/*", (c) => apiError(c, 404, "not_found", "There is no such API route."));
   if (deps.config.webDistDir) serveWebApp(app, deps.config.webDistDir);
   return app;

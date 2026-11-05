@@ -1,7 +1,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 
 /** Every API error has this shape: a stable machine-readable code and a sentence for people. */
-export function apiError(c: Context, status: 400 | 401 | 403 | 404, code: string, message: string) {
+export function apiError(c: Context, status: 400 | 401 | 403 | 404 | 503, code: string, message: string) {
   return c.json({ error: { code, message } }, status);
 }
 
