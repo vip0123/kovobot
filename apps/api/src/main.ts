@@ -1,19 +1,9 @@
 import { serve } from "@hono/node-server";
-import { ConfigError, loadConfig } from "@kovobot/config";
 import { createDb } from "@kovobot/db";
 import { createApp } from "./app.ts";
+import { configOrExit } from "./config-or-exit.ts";
 import { createMailer } from "./mailer.ts";
 import { createOpenAIAdapter } from "./models/openai.ts";
-
-function configOrExit() {
-  try {
-    return loadConfig(process.env);
-  } catch (error) {
-    if (!(error instanceof ConfigError)) throw error;
-    console.error(error.message);
-    process.exit(1);
-  }
-}
 
 const { config, warnings } = configOrExit();
 for (const warning of warnings) console.warn(`Warning: ${warning}`);

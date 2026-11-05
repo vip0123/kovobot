@@ -13,6 +13,7 @@
 #                                          stores SMTP_PASSWORD in Secret Manager
 #   GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET
 #                                          optional: turn on Sign in with Google
+#   OPENAI_API_KEY                         our OpenAI key, so Bots can reply; setup stores it
 #   LANDING_URL                            optional: the landing page that posts leads,
 #                                          e.g. https://kovobot.com
 set -euo pipefail
@@ -80,6 +81,7 @@ setup() {
   openssl rand -base64 32 | tr -d '\n' | gcloud secrets create SESSION_SECRET --data-file - --project "$PROJECT"
   store_secret SMTP_PASSWORD
   [[ -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]] && store_secret GOOGLE_OAUTH_CLIENT_SECRET
+  [[ -n "${OPENAI_API_KEY:-}" ]] && store_secret OPENAI_API_KEY
   echo "Set up. Next: deploy/staging.sh deploy"
 }
 
@@ -109,6 +111,10 @@ deploy() {
   if [[ -n "${GOOGLE_OAUTH_CLIENT_ID:-}" ]]; then
     env_vars="$env_vars,GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID"
     secrets="$secrets,GOOGLE_OAUTH_CLIENT_SECRET=GOOGLE_OAUTH_CLIENT_SECRET:latest"
+  fi
+  # Without our OpenAI key, Bots on staging answer that their model isn't available.
+  if gcloud secrets describe OPENAI_API_KEY --project "$PROJECT" >/dev/null 2>&1; then
+    secrets="$secrets,OPENAI_API_KEY=OPENAI_API_KEY:latest"
   fi
 
   gcloud builds submit --tag "$image" --project "$PROJECT" .

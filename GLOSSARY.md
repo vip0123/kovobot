@@ -22,6 +22,10 @@ _Avoid_: ban, block, lockout
 A one-time link we email to sign someone in. It works once, for 15 minutes, and the first one used creates the Customer.
 _Avoid_: magic link, login link, token
 
+**Lead**:
+Someone on the waitlist before sign-up opens: an email, what they'd hand a Bot first, and when they joined. Each Lead gets one email, when sign-up opens.
+_Avoid_: subscriber, prospect, signup
+
 ### Billing
 
 **Plan**:
@@ -145,6 +149,10 @@ _Avoid_: untrusted input, external data
 **Channel**:
 A place where people chat with a Bot: web, the desktop app, Telegram, Discord or Slack.
 _Avoid_: integration, platform, connector
+
+**Conversation**:
+A Bot's running exchange of messages on one Channel. On the web Channel each Bot has one, and it survives a reload.
+_Avoid_: thread, session, chat history
 
 **Channel app**:
 The app a Customer registers with Telegram, Discord or Slack and connects on our website. Their Bot talks on that Channel through it.

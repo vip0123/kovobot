@@ -21,10 +21,11 @@ export interface ResponsesRequest {
 export class FakeOpenAI {
   readonly requests: ResponsesRequest[] = [];
   baseUrl = "";
-  private next: { kind: "reply"; deltas: string[] } | { kind: "fail"; status: number } = {
-    kind: "reply",
-    deltas: ["Hello!"],
-  };
+  private next:
+    | { kind: "reply"; deltas: string[] }
+    | { kind: "break"; deltas: string[] }
+    | { kind: "fail"; status: number } = { kind: "reply", deltas: ["Hello!"] };
+  private gate: Promise<void> | undefined;
   private server: Server | undefined;
 
   /** The next reply streams in these pieces. */
@@ -32,9 +33,26 @@ export class FakeOpenAI {
     this.next = { kind: "reply", deltas };
   }
 
+  /** The next reply streams these pieces, then the model fails before finishing. */
+  failMidStream(...deltas: string[]): void {
+    this.next = { kind: "break", deltas };
+  }
+
   /** The next request fails with this HTTP status. */
   failWith(status: number): void {
     this.next = { kind: "fail", status };
+  }
+
+  /** Holds the next reply back until the returned function is called. */
+  holdNextReply(): () => void {
+    let release!: () => void;
+    this.gate = new Promise((resolve) => (release = resolve));
+    return release;
+  }
+
+  /** Resolves once the fake has received this many requests in all. */
+  async waitForRequests(count: number): Promise<void> {
+    while (this.requests.length < count) await new Promise((resolve) => setTimeout(resolve, 5));
   }
 
   async start(): Promise<void> {
@@ -58,8 +76,11 @@ export class FakeOpenAI {
     }
     const body = JSON.parse(await readBody(request)) as ResponsesRequest;
     this.requests.push(body);
-
     const next = this.next;
+    const gate = this.gate;
+    this.gate = undefined;
+    await gate;
+
     if (next.kind === "fail") {
       sendJson(response, next.status, { error: { message: "The server had an error.", type: "server_error" } });
       return;
@@ -74,6 +95,13 @@ export class FakeOpenAI {
     send("response.created", { response: { id, object: "response", status: "in_progress", model: body.model, output: [] } });
     for (const delta of next.deltas) {
       send("response.output_text.delta", { item_id: "msg_1", output_index: 0, content_index: 0, delta, logprobs: [] });
+    }
+    if (next.kind === "break") {
+      send("response.failed", {
+        response: { id, object: "response", status: "failed", model: body.model, output: [], error: { code: "server_error", message: "The model failed." } },
+      });
+      response.end();
+      return;
     }
     send("response.completed", {
       response: {

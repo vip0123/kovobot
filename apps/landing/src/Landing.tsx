@@ -30,7 +30,7 @@ export function Landing() {
       <main id="top">
         <Hero waitlist={waitlist} />
         <Channels />
-        <Jobs />
+        <WhatItDoes />
         <Steps />
         <Approvals />
         <Computers />
@@ -57,7 +57,7 @@ function Header() {
           <span className="brand-name">Kovobot</span>
         </a>
         <nav aria-label="Main" className="main-nav">
-          <a href="#jobs">What it does</a>
+          <a href="#what-it-does">What it does</a>
           <a href="#computers">Computers</a>
           <a href="#pricing">Pricing</a>
           <a href="#self-host">Self-host</a>
@@ -246,16 +246,16 @@ function Icon({ name, size = 28 }: { name: keyof typeof ICONS; size?: number }) 
   );
 }
 
-function Jobs() {
+function WhatItDoes() {
   const max = PLANS.find((plan) => plan.macos)!;
-  const jobs = [
+  const uses = [
     { icon: "search", title: "Market watch", body: "Checks competitors' sites on a schedule, notes price and feature changes, and sends you a Monday summary." },
     { icon: "mail", title: "Inbox follow-ups", body: "Drafts replies and chases the threads that went quiet. Nothing is sent until you approve it." },
     { icon: "chart", title: "Reports from your tools", body: "Pulls numbers from the tools you connect over MCP and posts a short summary to your team's Slack channel." },
     { icon: "code", title: "Build and test apps", body: `On a Mac of its own, your Bot builds your app and runs it in the iOS Simulator. Available on ${max.name}.` },
   ] as const;
   return (
-    <section id="jobs" className="section">
+    <section id="what-it-does" className="section">
       <div className="container stack-40">
         <div className="section-head">
           <h2 className="section-title">Work you can hand to a Bot</h2>
@@ -265,11 +265,11 @@ function Jobs() {
           </p>
         </div>
         <div className="card-grid">
-          {jobs.map((job) => (
-            <article key={job.title} className="card">
-              <Icon name={job.icon} />
-              <h3>{job.title}</h3>
-              <p className="muted">{job.body}</p>
+          {uses.map((use) => (
+            <article key={use.title} className="card">
+              <Icon name={use.icon} />
+              <h3>{use.title}</h3>
+              <p className="muted">{use.body}</p>
             </article>
           ))}
         </div>
@@ -427,7 +427,8 @@ function Computers() {
               <span> a day</span>
             </p>
             <p className="muted">
-              A whole Mac, yours alone for at least a day, for building and testing apps. iOS runs in the Simulator, and
+              A whole Mac, yours alone for at least {MACOS_COMPUTER.minimumDays === 1 ? "a day" : `${MACOS_COMPUTER.minimumDays} days`}, for
+              building and testing apps. iOS runs in the Simulator, and
               you install Xcode under your own Apple Account.
             </p>
           </article>

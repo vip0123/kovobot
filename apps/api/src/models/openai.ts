@@ -7,20 +7,17 @@ export function createOpenAIAdapter({ apiKey, baseURL }: { apiKey: string; baseU
   const client = new OpenAI({ apiKey, baseURL, maxRetries: 0 });
 
   return {
-    async *stream({ model, instructions, conversation, signal }) {
+    async *stream({ model, instructions, conversation }) {
       let events;
       try {
-        events = await client.responses.create(
-          {
-            model,
-            instructions,
-            input: conversation.map((turn) => ({ role: turn.role, content: turn.content })),
-            stream: true,
-            // Conversations live in our database, not on OpenAI's servers.
-            store: false,
-          },
-          { signal },
-        );
+        events = await client.responses.create({
+          model,
+          instructions,
+          input: conversation.map((message) => ({ role: message.role, content: message.content })),
+          stream: true,
+          // Conversations live in our database, not on OpenAI's servers.
+          store: false,
+        });
       } catch (error) {
         throw new ModelError("OpenAI didn't accept the call.", { cause: error });
       }
@@ -33,7 +30,10 @@ export function createOpenAIAdapter({ apiKey, baseURL }: { apiKey: string; baseU
               break;
             case "response.completed": {
               const usage = event.response.usage;
-              yield { type: "done", usage: { inputTokens: usage?.input_tokens ?? 0, outputTokens: usage?.output_tokens ?? 0 } };
+              yield {
+                type: "done",
+                usage: usage ? { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens } : null,
+              };
               return;
             }
             case "response.failed":

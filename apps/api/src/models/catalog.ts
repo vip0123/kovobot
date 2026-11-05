@@ -1,9 +1,9 @@
-import type { Provider } from "./adapter.ts";
+import type { ModelProvider } from "./adapter.ts";
 
 export interface ModelInfo {
   id: string;
   name: string;
-  provider: Provider;
+  provider: ModelProvider;
 }
 
 /** The models a Bot can use. More providers join as their adapters land (tickets 04 and 05). */

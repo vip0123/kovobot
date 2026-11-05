@@ -1,6 +1,6 @@
-import { ConfigError, loadConfig } from "@kovobot/config";
 import { createDb } from "@kovobot/db";
 import type { AppDeps } from "../app.ts";
+import { configOrExit } from "../config-or-exit.ts";
 import { createMailer } from "../mailer.ts";
 
 /**
@@ -8,14 +8,7 @@ import { createMailer } from "../mailer.ts";
  * closes the database. Commands run with the same environment as the server.
  */
 export async function runCommand(work: (deps: Pick<AppDeps, "config" | "db" | "mailer" | "now">) => Promise<void>) {
-  let config;
-  try {
-    ({ config } = loadConfig(process.env));
-  } catch (error) {
-    if (!(error instanceof ConfigError)) throw error;
-    console.error(error.message);
-    process.exit(1);
-  }
+  const { config } = configOrExit();
   const db = createDb(config.databaseUrl);
   try {
     await work({ config, db, mailer: createMailer(config.email), now: () => new Date() });

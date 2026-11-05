@@ -1,9 +1,9 @@
 // Brings the database up to date: pnpm db:migrate locally, or the migration
 // job before each deploy. It reads the same settings as the server.
-import { loadConfig } from "@kovobot/config";
 import { createDb, migrate } from "@kovobot/db";
+import { configOrExit } from "./config-or-exit.ts";
 
-const { config } = loadConfig(process.env);
+const { config } = configOrExit();
 const db = createDb(config.databaseUrl);
 try {
   const applied = await migrate(db);

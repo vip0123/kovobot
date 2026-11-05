@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { Db } from "@kovobot/db";
-import { runTurn } from "./agent.ts";
+import { runTask } from "./agent.ts";
 import type { AppDeps } from "./app.ts";
 import { sessionCustomer } from "./auth/sessions.ts";
 import type { Customer } from "./customers.ts";
@@ -24,6 +24,8 @@ export interface Message {
 
 const MAX_NAME_LENGTH = 80;
 const MAX_MESSAGE_LENGTH = 20_000;
+/** How many of a conversation's latest messages the model sees. */
+const MESSAGES_SENT_TO_MODEL = 50;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Bots, and chatting with them on the web Channel. Every route needs a signed-in Customer. */
@@ -48,7 +50,7 @@ export function botRoutes(deps: AppDeps) {
   routes.post("/bots", async (c) => {
     const body = await jsonBody(c);
     const name = botName(body.name);
-    if (!name) return apiError(c, 400, "invalid_name", `Give the Bot a name of up to ${MAX_NAME_LENGTH} characters.`);
+    if (!name) return invalidName(c);
     const model = findModel(body.model);
     if (!model) return apiError(c, 400, "unknown_model", "Pick one of the listed models.");
     const bot = await createBot(deps.db, c.get("customer").id, { name, model: model.id }, deps.now());
@@ -57,7 +59,7 @@ export function botRoutes(deps: AppDeps) {
 
   routes.patch("/bots/:id", async (c) => {
     const name = botName((await jsonBody(c)).name);
-    if (!name) return apiError(c, 400, "invalid_name", `Give the Bot a name of up to ${MAX_NAME_LENGTH} characters.`);
+    if (!name) return invalidName(c);
     const bot = await renameBot(deps.db, c.get("customer").id, c.req.param("id"), name);
     return bot ? c.json({ bot }) : botNotFound(c);
   });
@@ -89,8 +91,17 @@ export function botRoutes(deps: AppDeps) {
     }
 
     const conversationId = await webConversation(deps.db, bot.id, deps.now());
-    await addMessage(deps.db, conversationId, "user", text, deps.now());
-    const conversation = (await listMessages(deps.db, conversationId)).map(({ role, content }) => ({ role, content }));
+    if (!(await startReplying(deps.db, conversationId, deps.now()))) {
+      return apiError(c, 409, "bot_busy", `${bot.name} is still answering the last message.`);
+    }
+    let conversation;
+    try {
+      await addMessage(deps.db, conversationId, "user", text, deps.now());
+      conversation = (await recentMessages(deps.db, conversationId)).map(({ role, content }) => ({ role, content }));
+    } catch (error) {
+      await stopReplying(deps.db, conversationId);
+      throw error;
+    }
 
     return streamSSE(c, async (stream) => {
       // If the browser leaves mid-reply, the reply still finishes and is saved, so a reload shows it.
@@ -99,7 +110,7 @@ export function botRoutes(deps: AppDeps) {
       };
       let reply = "";
       try {
-        for await (const event of runTurn(adapter, { botName: bot.name, model: model.id, conversation })) {
+        for await (const event of runTask(adapter, { botName: bot.name, model: model.id, conversation })) {
           if (event.type !== "text") continue;
           reply += event.text;
           await send("delta", { text: event.text });
@@ -108,7 +119,11 @@ export function botRoutes(deps: AppDeps) {
         await send("done", { message });
       } catch (error) {
         console.error(`Bot ${bot.id}: the model call failed`, error);
+        // Keep what the Customer already saw, so a reload shows the same conversation.
+        if (reply) await addMessage(deps.db, conversationId, "assistant", reply, deps.now());
         await send("error", { code: "model_failed", message: "The model didn't answer. Try again in a moment." });
+      } finally {
+        await stopReplying(deps.db, conversationId);
       }
     });
   });
@@ -118,6 +133,10 @@ export function botRoutes(deps: AppDeps) {
 
 function botNotFound(c: Parameters<typeof apiError>[0]) {
   return apiError(c, 404, "bot_not_found", "There's no such Bot.");
+}
+
+function invalidName(c: Parameters<typeof apiError>[0]) {
+  return apiError(c, 400, "invalid_name", `Give the Bot a name of up to ${MAX_NAME_LENGTH} characters.`);
 }
 
 function botName(value: unknown): string | null {
@@ -185,13 +204,39 @@ async function webConversation(db: Db, botId: string, now: Date): Promise<string
   return rows[0]!.id;
 }
 
+const MESSAGE_COLUMNS = `id::text, role, content, created_at AS "createdAt"`;
+
 async function listMessages(db: Db, conversationId: string): Promise<Message[]> {
   const { rows } = await db.query<Message>(
-    `SELECT id::text, role, content, created_at AS "createdAt" FROM messages
-     WHERE conversation_id = $1 ORDER BY id`,
+    `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id = $1 ORDER BY id`,
     [conversationId],
   );
   return rows;
+}
+
+/** The latest messages, oldest first: what the model sees, so a long conversation never outgrows it. */
+async function recentMessages(db: Db, conversationId: string): Promise<Message[]> {
+  const { rows } = await db.query<Message>(
+    `SELECT * FROM (
+       SELECT ${MESSAGE_COLUMNS}, id AS seq FROM messages WHERE conversation_id = $1 ORDER BY id DESC LIMIT $2
+     ) recent ORDER BY seq`,
+    [conversationId, MESSAGES_SENT_TO_MODEL],
+  );
+  return rows;
+}
+
+/** Claims the conversation for one reply. False while another reply is under way. */
+async function startReplying(db: Db, conversationId: string, now: Date): Promise<boolean> {
+  const { rowCount } = await db.query(
+    `UPDATE conversations SET replying_since = $2
+     WHERE id = $1 AND (replying_since IS NULL OR replying_since < $2::timestamptz - interval '5 minutes')`,
+    [conversationId, now],
+  );
+  return rowCount === 1;
+}
+
+async function stopReplying(db: Db, conversationId: string): Promise<void> {
+  await db.query("UPDATE conversations SET replying_since = NULL WHERE id = $1", [conversationId]);
 }
 
 async function addMessage(
@@ -203,7 +248,7 @@ async function addMessage(
 ): Promise<Message> {
   const { rows } = await db.query<Message>(
     `INSERT INTO messages (conversation_id, role, content, created_at) VALUES ($1, $2, $3, $4)
-     RETURNING id::text, role, content, created_at AS "createdAt"`,
+     RETURNING ${MESSAGE_COLUMNS}`,
     [conversationId, role, content, now],
   );
   return rows[0]!;

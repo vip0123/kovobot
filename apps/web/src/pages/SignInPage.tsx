@@ -53,8 +53,8 @@ export function SignInPage() {
             </p>
           ) : (
             <p>
-              We emailed <strong>{sentTo}</strong>. If you already have access, it's a sign-in link that works once,
-              for 15 minutes. If not, you're on the waitlist, and we'll email you when sign-up opens.
+              If <strong>{sentTo}</strong> already has access, we've emailed it a sign-in link that works once, for 15
+              minutes. If you're new, you're on the waitlist now, and we'll email you once, when sign-up opens.
             </p>
           )}
           <button type="button" className="button secondary" onClick={() => setSentTo(null)}>

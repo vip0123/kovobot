@@ -22,17 +22,12 @@ describe("while sign-up is closed", () => {
     });
   });
 
-  test("a new address gets one waitlist email instead of a sign-in link, and joins the waitlist", async () => {
+  test("a new address joins the waitlist instead of getting a sign-in link, and hears nothing until launch", async () => {
     const email = uniqueEmail();
 
-    for (let i = 0; i < 2; i++) {
-      expect((await server.browser().post("/api/auth/email-link", { email })).status).toBe(202);
-    }
+    expect((await server.browser().post("/api/auth/email-link", { email })).status).toBe(202);
 
-    const sent = server.outbox.filter((mail) => mail.to === email);
-    expect(sent).toHaveLength(1);
-    expect(sent[0]!.subject).toMatch(/waitlist/i);
-    expect(sent[0]!.text).not.toMatch(/#token=/);
+    expect(server.outbox.filter((mail) => mail.to === email)).toEqual([]);
     expect(await onWaitlist(email)).toBe(true);
   });
 

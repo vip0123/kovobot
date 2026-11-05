@@ -160,6 +160,55 @@ describe("chatting on the web Channel", () => {
   });
 });
 
+describe("keeping a conversation sound", () => {
+  test("if the model fails part-way, what it already wrote is kept for the reload", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    server.openai.failMidStream("Half an ", "answer");
+
+    const events = await chat(browser, bot, "Question?");
+
+    expect(events.at(-1)).toMatchObject({ event: "error", data: { code: "model_failed" } });
+    expect(await history(browser, bot)).toMatchObject([
+      { role: "user", content: "Question?" },
+      { role: "assistant", content: "Half an answer" },
+    ]);
+  });
+
+  test("a Bot answers one message at a time in a conversation", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    server.openai.replyWith("First answer.");
+    const release = server.openai.holdNextReply();
+    const before = server.openai.requests.length;
+
+    const first = browser.post(`/api/bots/${bot.id}/messages`, { content: "First?" });
+    await server.openai.waitForRequests(before + 1);
+    const second = await browser.post(`/api/bots/${bot.id}/messages`, { content: "Second?" });
+    expect(second.status).toBe(409);
+    expect(await second.json()).toMatchObject({ error: { code: "bot_busy" } });
+
+    release();
+    expect((await serverSentEvents(await first)).at(-1)).toMatchObject({ event: "done" });
+    expect((await history(browser, bot)).map((message) => message.content)).not.toContain("Second?");
+  });
+
+  test("only the latest 50 messages go to the model, so a long conversation keeps working", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+
+    for (let i = 1; i <= 26; i++) {
+      server.openai.replyWith(`Answer ${i}`);
+      await chat(browser, bot, `Question ${i}`);
+    }
+
+    const input = server.openai.requests.at(-1)!.input;
+    expect(input).toHaveLength(50);
+    expect(input[0]).toEqual({ role: "assistant", content: "Answer 1" });
+    expect(input.at(-1)).toEqual({ role: "user", content: "Question 26" });
+  });
+});
+
 describe("without an OpenAI key", () => {
   const keyless = startTestServer({}, { openai: false });
 

@@ -47,23 +47,11 @@ export async function saveLead(db: Db, lead: { email: string; firstUse: string |
 }
 
 /**
- * While sign-up is closed, someone new who tries to sign in joins the waitlist,
- * and the first time they do, they get one email saying so.
+ * While sign-up is closed, someone new who tries to sign in joins the waitlist.
+ * Like every lead, they hear from us once: when sign-up opens.
  */
-export async function joinWaitlist(deps: Pick<AppDeps, "db" | "mailer" | "now">, email: string): Promise<void> {
-  if (!(await saveLead(deps.db, { email, firstUse: null }, deps.now()))) return;
-  await deps.mailer.send({
-    to: email,
-    subject: "You're on the Kovobot waitlist",
-    text: [
-      "Kovobot isn't open for sign-up yet, so we've put you on the waitlist.",
-      "We'll email you once, when sign-up opens.",
-    ].join("\n"),
-    html: [
-      "<p>Kovobot isn't open for sign-up yet, so we've put you on the waitlist.</p>",
-      "<p>We'll email you once, when sign-up opens.</p>",
-    ].join("\n"),
-  });
+export async function joinWaitlist(deps: Pick<AppDeps, "db" | "now">, email: string): Promise<void> {
+  await saveLead(deps.db, { email, firstUse: null }, deps.now());
 }
 
 /** Every lead, oldest first: what pnpm leads:list prints. */

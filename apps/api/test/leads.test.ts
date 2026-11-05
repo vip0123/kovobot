@@ -39,6 +39,18 @@ describe("the waitlist", () => {
     expect(await response.json()).toMatchObject({ error: { code: "invalid_email" } });
   });
 
+  test("a plain form post from another website can't add a lead", async () => {
+    const email = uniqueEmail();
+
+    await server.browser().send("/api/leads", {
+      method: "POST",
+      headers: { origin: "https://evil.example", "content-type": "text/plain" },
+      body: JSON.stringify({ email }),
+    });
+
+    expect((await listLeads(server.deps.db)).map((lead) => lead.email)).not.toContain(email);
+  });
+
   test("the landing page may post from its own origin", async () => {
     const preflight = await server.browser().send("/api/leads", {
       method: "OPTIONS",
