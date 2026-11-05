@@ -23,7 +23,7 @@ With no `.env` the server starts self-hosted and writes sign-in links to its log
 ## Code rules
 
 - **Node runs the server's `.ts` files directly** by stripping types: no build step, so only erasable syntax (no enums, namespaces or constructor parameter properties) and relative imports end in `.ts`.
-- **Settings come only from `loadConfig`** in `packages/config`. A new environment variable goes there, with a test, and into `.env.example`.
+- **The server's settings come only from `loadConfig`** in `packages/config`. A new server environment variable goes there, with a test, and into `.env.example`. Tooling reads its own: Vite's proxy reads `API_URL`, and tests read `TEST_DATABASE_URL`.
 - **Migrations** live in `packages/db/migrations/NNNN_name.sql`. Each runs before its release ships, while the previous release still serves, so it must work with the previous release's code: add now, drop in a later release. An applied migration is never edited (the migrator checks checksums); write a new one.
 - **Tests sit at three seams:** `loadConfig`, the HTTP API through `apps/api/test/harness.ts` against the real database (only email, Google and the clock are fake), and booting the server. The web pages are checked by hand in a browser.
 - **The web app calls the API on its own origin under `/api`.** Deployed, the API serves the web build, so the session cookie stays first-party.

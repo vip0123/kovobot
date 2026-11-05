@@ -28,8 +28,10 @@ COPY packages/config/src packages/config/src
 COPY packages/db/src packages/db/src
 COPY packages/db/migrations packages/db/migrations
 COPY --from=build /app/apps/web/dist apps/web/dist
+# Serving the web build makes the web app's URL default to the API's (one origin).
 ENV WEB_DIST_DIR=/app/apps/web/dist
+# Cloud Run sets PORT itself; this default makes a plain `docker run -p 8080:8080` work too.
+ENV PORT=8080
 USER node
-# Cloud Run sets PORT (8080).
 EXPOSE 8080
 CMD ["node", "apps/api/src/main.ts"]

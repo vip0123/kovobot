@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import type { AppDeps } from "../app.ts";
-import { customerForGoogle, customerWithEmail } from "../customers.ts";
+import { findOrCreateCustomerByEmail, findOrCreateCustomerForGoogle, normaliseEmail } from "../customers.ts";
 import { apiError, jsonBody } from "../http.ts";
 import { newToken } from "../tokens.ts";
 import { redeemSignInLink, sendSignInLink } from "./email-links.ts";
@@ -28,12 +28,12 @@ export function authRoutes(deps: AppDeps) {
     if (!email) {
       return apiError(c, 400, "link_invalid", "This sign-in link has expired or was already used. Ask for a new one.");
     }
-    const customer = await customerWithEmail(deps.db, email);
+    const customer = await findOrCreateCustomerByEmail(deps.db, email);
     await startSession(c, deps, customer.id);
     return c.json({ customer });
   });
 
-  routes.get("/auth/options", (c) => c.json({ emailLink: true, google: deps.config.googleSignIn !== null }));
+  routes.get("/auth/options", (c) => c.json({ google: deps.config.googleSignIn !== null }));
 
   const googleRedirectUri = `${deps.config.apiUrl}/api/auth/google/callback`;
 
@@ -65,8 +65,8 @@ export function authRoutes(deps: AppDeps) {
     if (!state || !codeVerifier || !code || c.req.query("state") !== state) return failed();
 
     const identity = await googleIdentity(deps.fetch, settings, googleRedirectUri, code, codeVerifier, deps.now());
-    if (!identity?.emailVerified) return failed();
-    const customer = await customerForGoogle(deps.db, identity);
+    const customer = identity && (await findOrCreateCustomerForGoogle(deps.db, identity));
+    if (!customer) return failed();
     await startSession(c, deps, customer.id);
     return c.redirect(`${deps.config.appUrl}/bots`);
   });
@@ -83,12 +83,4 @@ export function authRoutes(deps: AppDeps) {
   });
 
   return routes;
-}
-
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function normaliseEmail(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const email = value.trim().toLowerCase();
-  return email.length <= 254 && EMAIL_PATTERN.test(email) ? email : null;
 }

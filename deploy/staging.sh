@@ -20,6 +20,19 @@ SERVICE_ACCOUNT="kovobot-staging@$PROJECT.iam.gserviceaccount.com"
 REPOSITORY="$REGION-docker.pkg.dev/$PROJECT/kovobot"
 CLOUDSQL="$PROJECT:$REGION:$DB_INSTANCE"
 
+# Grants a project role, retrying while a just-created service account propagates.
+grant() {
+  local member="$1" role="$2" attempt
+  for attempt in 1 2 3 4 5 6; do
+    if gcloud projects add-iam-policy-binding "$PROJECT" --member "$member" --role "$role" --condition None >/dev/null; then
+      return 0
+    fi
+    echo "Waiting for $member to exist (attempt $attempt)..." >&2
+    sleep 10
+  done
+  return 1
+}
+
 setup() {
   gcloud services enable run.googleapis.com sqladmin.googleapis.com artifactregistry.googleapis.com \
     cloudbuild.googleapis.com secretmanager.googleapis.com --project "$PROJECT"
@@ -35,8 +48,13 @@ setup() {
 
   gcloud iam service-accounts create kovobot-staging --project "$PROJECT"
   for role in roles/cloudsql.client roles/secretmanager.secretAccessor; do
-    gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SERVICE_ACCOUNT" --role "$role"
+    grant "serviceAccount:$SERVICE_ACCOUNT" "$role"
   done
+  # New projects run Cloud Build as the Compute Engine default service account,
+  # which needs the builder role to read the uploaded source and push the image.
+  local project_number
+  project_number="$(gcloud projects describe "$PROJECT" --format 'value(projectNumber)')"
+  grant "serviceAccount:$project_number-compute@developer.gserviceaccount.com" roles/cloudbuild.builds.builder
 
   # Cloud Run reaches Cloud SQL through a Unix socket under /cloudsql.
   printf 'postgres://kovobot:%s@/kovobot?host=/cloudsql/%s' "$db_password" "$CLOUDSQL" |

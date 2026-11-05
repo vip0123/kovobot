@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { ApiError, api, GOOGLE_SIGN_IN_URL } from "../api.ts";
-import { Logo } from "./Logo.tsx";
+import { api, errorMessage, GOOGLE_SIGN_IN_URL } from "../api.ts";
+import { Logo } from "../Logo.tsx";
 
 export function SignInPage() {
   const navigate = useNavigate();
@@ -34,7 +34,7 @@ export function SignInPage() {
       await api.sendSignInLink(email);
       setSentTo(email.trim());
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "Something went wrong. Try again.");
+      setError(errorMessage(caught));
     } finally {
       setSending(false);
     }

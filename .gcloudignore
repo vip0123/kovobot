@@ -1,0 +1,14 @@
+# What `gcloud builds submit` leaves out of the source it uploads. Without this
+# file gcloud falls back to .gitignore, which a fresh clone may not have.
+.git
+.gcloudignore
+**/node_modules/
+**/dist/
+.env
+.env.*
+!.env.example
+docs/
+.scratch/
+.claude/
+.agents/
+design/

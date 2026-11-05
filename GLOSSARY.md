@@ -18,6 +18,10 @@ _Avoid_: admin, host, self-hoster
 Our stop on a Customer's use after a policy breach. Their Bots stop, and their data is kept for 30 days.
 _Avoid_: ban, block, lockout
 
+**Sign-in link**:
+A one-time link we email to sign someone in. It works once, for 15 minutes, and the first one used creates the Customer.
+_Avoid_: magic link, login link, token
+
 ### Billing
 
 **Plan**:

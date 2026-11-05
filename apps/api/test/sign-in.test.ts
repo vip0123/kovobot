@@ -62,6 +62,14 @@ describe("sign-in by email link", () => {
     expect(sentTo()).toBe(6);
   });
 
+  test("the hourly limit holds when the requests arrive all at once", async () => {
+    const email = uniqueEmail();
+
+    await Promise.all(Array.from({ length: 10 }, () => server.browser().post("/api/auth/email-link", { email })));
+
+    expect(server.outbox.filter((sent) => sent.to === email).length).toBe(5);
+  });
+
   test("something that isn't an email address is refused and nothing is sent", async () => {
     const sentBefore = server.outbox.length;
     const response = await server.browser().post("/api/auth/email-link", { email: "not-an-address" });

@@ -96,8 +96,8 @@ export class Browser {
     this.origin = origin;
   }
 
-  get(path: string, headers: Record<string, string> = {}): Promise<Response> {
-    return this.send(path, { method: "GET", headers });
+  get(path: string): Promise<Response> {
+    return this.send(path, { method: "GET", headers: {} });
   }
 
   post(path: string, json?: unknown, headers: Record<string, string> = {}): Promise<Response> {

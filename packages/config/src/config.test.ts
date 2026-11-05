@@ -119,3 +119,26 @@ describe("hosted problems", () => {
     expect(problems.filter((p) => p.startsWith("APP_URL"))).toEqual(["APP_URL is required when hosted."]);
   });
 });
+
+describe("one origin for the web app and the API", () => {
+  test("serving the web build, the web app's URL is the API's, on the API's port", () => {
+    const { config } = loadConfig({ PORT: "8080", WEB_DIST_DIR: "/app/apps/web/dist" });
+
+    expect(config.apiUrl).toBe("http://localhost:8080");
+    expect(config.appUrl).toBe("http://localhost:8080");
+  });
+
+  test("hosted refuses a web app on a different origin from the API", () => {
+    const problems = configProblems({
+      ...hostedEnv,
+      APP_URL: "https://app.kovobot.example",
+      API_URL: "https://api.kovobot.example",
+    });
+
+    expect(problems).toEqual([expect.stringMatching(/^APP_URL must equal API_URL/)]);
+  });
+
+  test("a port that isn't a number is refused", () => {
+    expect(configProblems({ PORT: "eighty" })).toEqual([expect.stringMatching(/^PORT must be a port number/)]);
+  });
+});

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { GoogleSignInSettings } from "@kovobot/config";
+import { normaliseEmail } from "../customers.ts";
 
 const AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
@@ -8,8 +9,15 @@ const ISSUERS = new Set(["https://accounts.google.com", "accounts.google.com"]);
 export interface GoogleIdentity {
   subject: string;
   email: string;
-  emailVerified: boolean;
+  /**
+   * Google vouches that this person owns the email today: it is verified and
+   * Google hosts it (Gmail, or a Google Workspace account, which carries `hd`).
+   * Elsewhere a verified email may belong to someone who has since lost it.
+   */
+  ownsEmail: boolean;
 }
+
+const GMAIL_DOMAINS = new Set(["gmail.com", "googlemail.com"]);
 
 /** Where to send the browser to sign in with Google (authorization code flow with PKCE). */
 export function googleAuthorizationUrl(
@@ -67,16 +75,15 @@ export async function googleIdentity(
     claims.aud !== settings.clientId ||
     typeof claims.exp !== "number" ||
     claims.exp * 1000 <= now.getTime() ||
-    typeof claims.sub !== "string" ||
-    typeof claims.email !== "string"
+    typeof claims.sub !== "string"
   ) {
     return null;
   }
-  return {
-    subject: claims.sub,
-    email: claims.email.toLowerCase(),
-    emailVerified: claims.email_verified === true || claims.email_verified === "true",
-  };
+  const email = normaliseEmail(claims.email);
+  if (!email) return null;
+  const verified = claims.email_verified === true || claims.email_verified === "true";
+  const googleHostsEmail = GMAIL_DOMAINS.has(email.split("@")[1]!) || (typeof claims.hd === "string" && claims.hd !== "");
+  return { subject: claims.sub, email, ownsEmail: verified && googleHostsEmail };
 }
 
 function jwtClaims(jwt: string): Record<string, unknown> | null {

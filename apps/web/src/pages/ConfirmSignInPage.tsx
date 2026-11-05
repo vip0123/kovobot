@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { ApiError, api } from "../api.ts";
-import { Logo } from "./Logo.tsx";
+import { api, errorMessage } from "../api.ts";
+import { Logo } from "../Logo.tsx";
 
 /**
  * Where an emailed sign-in link lands. Signing in takes a click, because mail
@@ -21,7 +21,7 @@ export function ConfirmSignInPage() {
       await api.confirmSignInLink(token);
       navigate("/bots", { replace: true });
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "Something went wrong. Try again.");
+      setError(errorMessage(caught));
       setSigningIn(false);
     }
   }

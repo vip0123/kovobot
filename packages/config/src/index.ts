@@ -33,7 +33,7 @@ export interface Config {
   webDistDir: string | null;
 }
 
-/** Every problem found in the environment, so an operator can fix them in one go. */
+/** Every problem found in the environment, so they can all be fixed in one go. */
 export class ConfigError extends Error {
   readonly problems: readonly string[];
 
@@ -45,8 +45,6 @@ export class ConfigError extends Error {
 }
 
 const SELF_HOSTED_DEFAULTS = {
-  APP_URL: "http://localhost:5173",
-  API_URL: "http://localhost:3000",
   DATABASE_URL: "postgres://kovobot:kovobot@localhost:54329/kovobot",
   EMAIL_FROM: "Kovobot <noreply@localhost>",
 };
@@ -78,9 +76,12 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
     return SELF_HOSTED_DEFAULTS[name];
   };
 
-  const origin = (name: "APP_URL" | "API_URL"): string => {
-    const given = read(name);
-    const raw = required(name);
+  const origin = (name: "APP_URL" | "API_URL", selfHostedDefault: string): string => {
+    const raw = read(name);
+    if (!raw) {
+      if (hosted) problems.push(`${name} is required when hosted.`);
+      return selfHostedDefault;
+    }
     let url: URL;
     try {
       url = new URL(raw);
@@ -88,8 +89,7 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
       problems.push(`${name} must be a URL, not "${raw}".`);
       return raw;
     }
-    // A missing hosted URL is already reported as required; don't also complain about the default.
-    if (hosted && given && url.protocol !== "https:") problems.push(`${name} must use https when hosted.`);
+    if (hosted && url.protocol !== "https:") problems.push(`${name} must use https when hosted.`);
     return url.origin;
   };
 
@@ -154,20 +154,31 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
     problems.push("GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET must be set together.");
   }
 
+  // The session cookie and the same-origin check on writes need the web app and
+  // the API on one origin. An API serving the web build is that origin, so
+  // APP_URL defaults to API_URL there; only local development (Vite) splits them.
+  const listenPort = port("PORT", 3000);
+  const webDistDir = read("WEB_DIST_DIR") ?? null;
+  const apiUrl = origin("API_URL", `http://localhost:${listenPort}`);
+  const appUrl = webDistDir && !read("APP_URL") ? apiUrl : origin("APP_URL", "http://localhost:5173");
+  if ((hosted || webDistDir) && read("APP_URL") && appUrl !== apiUrl) {
+    problems.push("APP_URL must equal API_URL: the API serves the web app, so both share one origin.");
+  }
+
   const config: Config = {
     mode,
     billingEnabled: modeFlag("BILLING_ENABLED"),
     planLimitsEnabled: modeFlag("PLAN_LIMITS_ENABLED"),
     analyticsEnabled: hosted,
-    appUrl: origin("APP_URL"),
-    apiUrl: origin("API_URL"),
-    port: port("PORT", 3000),
+    appUrl,
+    apiUrl,
+    port: listenPort,
     databaseUrl: required("DATABASE_URL"),
     sessionSecret,
     email,
     googleSignIn:
       googleClientId && googleClientSecret ? { clientId: googleClientId, clientSecret: googleClientSecret } : null,
-    webDistDir: read("WEB_DIST_DIR") ?? null,
+    webDistDir,
   };
 
   if (problems.length > 0) throw new ConfigError(problems);

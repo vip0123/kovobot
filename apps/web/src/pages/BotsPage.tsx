@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { ApiError, api, type Customer } from "../api.ts";
-import { Logo } from "./Logo.tsx";
+import { Logo } from "../Logo.tsx";
 
 type Load = { state: "loading" } | { state: "ready"; customer: Customer } | { state: "signed-out" } | { state: "failed" };
 

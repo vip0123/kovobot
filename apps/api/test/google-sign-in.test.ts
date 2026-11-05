@@ -15,8 +15,9 @@ async function signInWithGoogle(browser: Browser, account: FakeGoogleAccount): P
   return browser.get(callback.pathname + callback.search);
 }
 
+/** A Google Workspace account on example.com: Google vouches that its owner owns the address. */
 function googleAccount(email = uniqueEmail()): FakeGoogleAccount {
-  return { sub: `google-${email}`, email, email_verified: true };
+  return { sub: `google-${email}`, email, email_verified: true, hd: "example.com" };
 }
 
 describe("Sign in with Google", () => {
@@ -51,6 +52,30 @@ describe("Sign in with Google", () => {
     expect(await currentCustomer(browser)).toBeNull();
   });
 
+  test("an address Google can't vouch for, outside Gmail and Google Workspace, is refused", async () => {
+    // Google only vouches for an address it hosts: elsewhere, a verified email
+    // may belong to someone who has since lost it.
+    const browser = server.browser();
+    const email = uniqueEmail();
+    const personalAccount = { sub: `google-${email}`, email, email_verified: true };
+
+    const landed = await signInWithGoogle(browser, personalAccount);
+
+    expect(landed.headers.get("location")).toBe(`${server.config.appUrl}/sign-in?error=google`);
+    expect(await currentCustomer(browser)).toBeNull();
+  });
+
+  test("a Customer linked to one Google account can't be reached by another with the same address", async () => {
+    const email = uniqueEmail();
+    await signInWithGoogle(server.browser(), { ...googleAccount(email), sub: "google-first" });
+    const second = server.browser();
+
+    const landed = await signInWithGoogle(second, { ...googleAccount(email), sub: "google-second" });
+
+    expect(landed.headers.get("location")).toBe(`${server.config.appUrl}/sign-in?error=google`);
+    expect(await currentCustomer(second)).toBeNull();
+  });
+
   test("a callback that didn't start in this browser is refused", async () => {
     // An attacker approves their own Google account, then lures the victim,
     // who is midway through signing in, to the attacker's callback link.
@@ -72,7 +97,7 @@ describe("without Google set up", () => {
   test("the sign-in page offers only the email link, and the Google route is off", async () => {
     const browser = plain.browser();
 
-    expect(await (await browser.get("/api/auth/options")).json()).toEqual({ emailLink: true, google: false });
+    expect(await (await browser.get("/api/auth/options")).json()).toEqual({ google: false });
     expect((await browser.get("/api/auth/google")).status).toBe(404);
   });
 });

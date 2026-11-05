@@ -4,6 +4,8 @@ export interface FakeGoogleAccount {
   sub: string;
   email: string;
   email_verified: boolean;
+  /** The Google Workspace domain, for Workspace accounts. */
+  hd?: string;
 }
 
 /**

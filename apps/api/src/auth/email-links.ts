@@ -1,3 +1,4 @@
+import { transaction } from "@kovobot/db";
 import type { AppDeps } from "../app.ts";
 import type { Email } from "../mailer.ts";
 import { hashToken, newToken } from "../tokens.ts";
@@ -13,14 +14,19 @@ const LINKS_PER_HOUR = 5;
 export async function sendSignInLink(deps: AppDeps, email: string): Promise<void> {
   const token = newToken();
   const now = deps.now();
-  const { rowCount } = await deps.db.query(
-    `INSERT INTO sign_in_links (token_hash, email, created_at, expires_at)
-     SELECT $1, $2::text, $3::timestamptz, $4
-     WHERE (SELECT count(*) FROM sign_in_links
-            WHERE email = $2::text AND created_at > $3::timestamptz - interval '1 hour') < $5`,
-    [hashToken(token), email, now, new Date(now.getTime() + LINK_LIFETIME_MINUTES * 60_000), LINKS_PER_HOUR],
-  );
-  if (rowCount === 0) return;
+  const created = await transaction(deps.db, async (client) => {
+    // One request per address at a time, so parallel requests can't all pass the count.
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [email]);
+    const { rowCount } = await client.query(
+      `INSERT INTO sign_in_links (token_hash, email, created_at, expires_at)
+       SELECT $1, $2::text, $3::timestamptz, $4
+       WHERE (SELECT count(*) FROM sign_in_links
+              WHERE email = $2::text AND created_at > $3::timestamptz - interval '1 hour') < $5`,
+      [hashToken(token), email, now, new Date(now.getTime() + LINK_LIFETIME_MINUTES * 60_000), LINKS_PER_HOUR],
+    );
+    return rowCount === 1;
+  });
+  if (!created) return;
   // The token rides in the fragment, so it never reaches a server log or a Referer header.
   const link = `${deps.config.appUrl}/sign-in/confirm#token=${token}`;
   await deps.mailer.send(signInEmail(email, link));

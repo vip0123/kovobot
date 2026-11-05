@@ -38,8 +38,13 @@ async function request<T>(path: string, init: { method?: "GET" | "POST"; json?: 
   return body as T;
 }
 
+/** The sentence to show for anything thrown by an API call. */
+export function errorMessage(caught: unknown): string {
+  return caught instanceof ApiError ? caught.message : "Something went wrong. Try again.";
+}
+
 export const api = {
-  signInOptions: () => request<{ emailLink: boolean; google: boolean }>("/auth/options"),
+  signInOptions: () => request<{ google: boolean }>("/auth/options"),
   sendSignInLink: (email: string) => request<unknown>("/auth/email-link", { method: "POST", json: { email } }),
   confirmSignInLink: (token: string) =>
     request<{ customer: Customer }>("/auth/email-link/confirm", { method: "POST", json: { token } }),
