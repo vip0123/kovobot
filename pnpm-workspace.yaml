@@ -1,0 +1,9 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Install only versions published at least 7 days ago (supply-chain safety).
+minimumReleaseAge: 10080
+
+onlyBuiltDependencies:
+  - esbuild

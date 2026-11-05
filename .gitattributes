@@ -1,0 +1,5 @@
+# Keep LF everywhere so scripts and migrations behave the same on Windows and in Linux containers.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

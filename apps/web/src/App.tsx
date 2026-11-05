@@ -1,0 +1,31 @@
+import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router";
+import { BotsPage } from "./pages/BotsPage.tsx";
+import { ConfirmSignInPage } from "./pages/ConfirmSignInPage.tsx";
+import { SignInPage } from "./pages/SignInPage.tsx";
+
+export function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Navigate to="/bots" replace />} />
+        <Route path="/sign-in" element={<SignInPage />} />
+        <Route path="/sign-in/confirm" element={<ConfirmSignInPage />} />
+        <Route path="/bots" element={<BotsPage />} />
+        <Route path="*" element={<NotFoundPage />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+function NotFoundPage() {
+  return (
+    <main className="centered">
+      <div className="card">
+        <h1>Page not found</h1>
+        <p className="muted">
+          <Link to="/bots">Go to your Bots</Link>
+        </p>
+      </div>
+    </main>
+  );
+}
