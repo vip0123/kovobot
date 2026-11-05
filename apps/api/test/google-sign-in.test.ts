@@ -1,31 +1,17 @@
 import { describe, expect, test } from "vitest";
-import type { FakeGoogleAccount } from "./fake-google.ts";
-import { type Browser, currentCustomer, startTestServer, uniqueEmail } from "./harness.ts";
+import { currentCustomer, googleAccount, startTestServer, uniqueEmail } from "./harness.ts";
 
 const server = startTestServer({
   GOOGLE_OAUTH_CLIENT_ID: "kovobot-test.apps.googleusercontent.com",
   GOOGLE_OAUTH_CLIENT_SECRET: "test-client-secret",
 });
 
-/** Goes to Google, picks `account` there, and comes back. Returns the API's last answer. */
-async function signInWithGoogle(browser: Browser, account: FakeGoogleAccount): Promise<Response> {
-  const start = await browser.get("/api/auth/google");
-  expect(start.status).toBe(302);
-  const callback = new URL(server.google.approve(start.headers.get("location")!, account));
-  return browser.get(callback.pathname + callback.search);
-}
-
-/** A Google Workspace account on example.com: Google vouches that its owner owns the address. */
-function googleAccount(email = uniqueEmail()): FakeGoogleAccount {
-  return { sub: `google-${email}`, email, email_verified: true, hd: "example.com" };
-}
-
 describe("Sign in with Google", () => {
   test("a new Customer signs up with Google and lands on the Bots page", async () => {
     const browser = server.browser();
     const account = googleAccount();
 
-    const landed = await signInWithGoogle(browser, account);
+    const landed = await server.signInWithGoogle(browser, account);
 
     expect(landed.status).toBe(302);
     expect(landed.headers.get("location")).toBe(`${server.config.appUrl}/bots`);
@@ -38,7 +24,7 @@ describe("Sign in with Google", () => {
     await server.signInByEmail(byLink, email);
     const byGoogle = server.browser();
 
-    await signInWithGoogle(byGoogle, googleAccount(email));
+    await server.signInWithGoogle(byGoogle, googleAccount(email));
 
     expect((await currentCustomer(byGoogle))?.id).toBe((await currentCustomer(byLink))?.id);
   });
@@ -46,7 +32,7 @@ describe("Sign in with Google", () => {
   test("an address Google hasn't verified is refused", async () => {
     const browser = server.browser();
 
-    const landed = await signInWithGoogle(browser, { ...googleAccount(), email_verified: false });
+    const landed = await server.signInWithGoogle(browser, { ...googleAccount(), email_verified: false });
 
     expect(landed.headers.get("location")).toBe(`${server.config.appUrl}/sign-in?error=google`);
     expect(await currentCustomer(browser)).toBeNull();
@@ -59,7 +45,7 @@ describe("Sign in with Google", () => {
     const email = uniqueEmail();
     const personalAccount = { sub: `google-${email}`, email, email_verified: true };
 
-    const landed = await signInWithGoogle(browser, personalAccount);
+    const landed = await server.signInWithGoogle(browser, personalAccount);
 
     expect(landed.headers.get("location")).toBe(`${server.config.appUrl}/sign-in?error=google`);
     expect(await currentCustomer(browser)).toBeNull();
@@ -67,10 +53,10 @@ describe("Sign in with Google", () => {
 
   test("a Customer linked to one Google account can't be reached by another with the same address", async () => {
     const email = uniqueEmail();
-    await signInWithGoogle(server.browser(), { ...googleAccount(email), sub: "google-first" });
+    await server.signInWithGoogle(server.browser(), { ...googleAccount(email), sub: "google-first" });
     const second = server.browser();
 
-    const landed = await signInWithGoogle(second, { ...googleAccount(email), sub: "google-second" });
+    const landed = await server.signInWithGoogle(second, { ...googleAccount(email), sub: "google-second" });
 
     expect(landed.headers.get("location")).toBe(`${server.config.appUrl}/sign-in?error=google`);
     expect(await currentCustomer(second)).toBeNull();
@@ -97,7 +83,7 @@ describe("without Google set up", () => {
   test("the sign-in page offers only the email link, and the Google route is off", async () => {
     const browser = plain.browser();
 
-    expect(await (await browser.get("/api/auth/options")).json()).toEqual({ google: false });
+    expect(await (await browser.get("/api/auth/options")).json()).toEqual({ google: false, signUpOpen: true });
     expect((await browser.get("/api/auth/google")).status).toBe(404);
   });
 });

@@ -1,8 +1,14 @@
 import { Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import type { AppDeps } from "../app.ts";
-import { findOrCreateCustomerByEmail, findOrCreateCustomerForGoogle, normaliseEmail } from "../customers.ts";
+import {
+  findCustomerByEmail,
+  findOrCreateCustomerByEmail,
+  findOrCreateCustomerForGoogle,
+  normaliseEmail,
+} from "../customers.ts";
 import { apiError, jsonBody } from "../http.ts";
+import { joinWaitlist } from "../leads.ts";
 import { newToken } from "../tokens.ts";
 import { redeemSignInLink, sendSignInLink } from "./email-links.ts";
 import { googleAuthorizationUrl, googleIdentity } from "./google.ts";
@@ -15,10 +21,14 @@ const GOOGLE_COOKIE_PATH = "/api/auth/google";
 export function authRoutes(deps: AppDeps) {
   const routes = new Hono();
 
+  const { signUpOpen } = deps.config;
+
   routes.post("/auth/email-link", async (c) => {
     const email = normaliseEmail((await jsonBody(c)).email);
     if (!email) return apiError(c, 400, "invalid_email", "Enter a valid email address.");
-    await sendSignInLink(deps, email);
+    // The answer is the same either way, so it never reveals who is a Customer.
+    if (!signUpOpen && !(await findCustomerByEmail(deps.db, email))) await joinWaitlist(deps, email);
+    else await sendSignInLink(deps, email);
     return c.json({}, 202);
   });
 
@@ -28,12 +38,15 @@ export function authRoutes(deps: AppDeps) {
     if (!email) {
       return apiError(c, 400, "link_invalid", "This sign-in link has expired or was already used. Ask for a new one.");
     }
-    const customer = await findOrCreateCustomerByEmail(deps.db, email);
+    const customer = signUpOpen
+      ? await findOrCreateCustomerByEmail(deps.db, email)
+      : await findCustomerByEmail(deps.db, email);
+    if (!customer) return apiError(c, 403, "sign_up_closed", "Sign-up opens at launch. We'll email you when it does.");
     await startSession(c, deps, customer.id);
     return c.json({ customer });
   });
 
-  routes.get("/auth/options", (c) => c.json({ google: deps.config.googleSignIn !== null }));
+  routes.get("/auth/options", (c) => c.json({ google: deps.config.googleSignIn !== null, signUpOpen }));
 
   const googleRedirectUri = `${deps.config.apiUrl}/api/auth/google/callback`;
 
@@ -65,8 +78,14 @@ export function authRoutes(deps: AppDeps) {
     if (!state || !codeVerifier || !code || c.req.query("state") !== state) return failed();
 
     const identity = await googleIdentity(deps.fetch, settings, googleRedirectUri, code, codeVerifier, deps.now());
-    const customer = identity && (await findOrCreateCustomerForGoogle(deps.db, identity));
-    if (!customer) return failed();
+    if (!identity) return failed();
+    const customer = await findOrCreateCustomerForGoogle(deps.db, identity, { mayCreate: signUpOpen });
+    if (!customer) {
+      const newcomer = !signUpOpen && identity.ownsEmail && !(await findCustomerByEmail(deps.db, identity.email));
+      if (!newcomer) return failed();
+      await joinWaitlist(deps, identity.email);
+      return c.redirect(`${deps.config.appUrl}/sign-in?error=sign_up_closed`);
+    }
     await startSession(c, deps, customer.id);
     return c.redirect(`${deps.config.appUrl}/bots`);
   });

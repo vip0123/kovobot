@@ -4,14 +4,32 @@
 #   deploy/staging.sh setup    once per project: APIs, registry, database, secrets, service account
 #   deploy/staging.sh deploy   every release: build, migrate, then deploy
 #
-# Needs the gcloud CLI, signed in (gcloud auth login), and these settings:
+# Needs the gcloud CLI, signed in (gcloud auth login), and these settings, taken
+# from the command line or else from .env:
 #   GOOGLE_CLOUD_PROJECT                   the Google Cloud project ID
 #   GCP_REGION                             defaults to us-central1
-#   SMTP_HOST, SMTP_USER, EMAIL_FROM       for deploy: where sign-in links are sent from
-#   GOOGLE_OAUTH_CLIENT_ID                 optional: turns on Sign in with Google
+#   SMTP_HOST, SMTP_PORT, SMTP_USER, EMAIL_FROM, SMTP_PASSWORD
+#                                          where sign-in links are sent from; setup
+#                                          stores SMTP_PASSWORD in Secret Manager
+#   GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET
+#                                          optional: turn on Sign in with Google
+#   LANDING_URL                            optional: the landing page that posts leads,
+#                                          e.g. https://kovobot.com
 set -euo pipefail
 
-: "${GOOGLE_CLOUD_PROJECT:?Set GOOGLE_CLOUD_PROJECT to the Google Cloud project ID}"
+# Settings not given on the command line come from .env. Values are never printed.
+if [[ -f .env ]]; then
+  while IFS='=' read -r name value; do
+    [[ "$name" =~ ^[A-Z][A-Z0-9_]*$ ]] || continue
+    [[ -n "${!name:-}" ]] && continue
+    value="${value%$'\r'}"
+    value="${value%\"}"
+    value="${value#\"}"
+    [[ -n "$value" ]] && export "$name=$value"
+  done < .env
+fi
+
+: "${GOOGLE_CLOUD_PROJECT:?Set GOOGLE_CLOUD_PROJECT (in .env or on the command line) to the Google Cloud project ID}"
 PROJECT="$GOOGLE_CLOUD_PROJECT"
 REGION="${GCP_REGION:-us-central1}"
 SERVICE="kovobot-staging"
@@ -60,12 +78,20 @@ setup() {
   printf 'postgres://kovobot:%s@/kovobot?host=/cloudsql/%s' "$db_password" "$CLOUDSQL" |
     gcloud secrets create DATABASE_URL --data-file - --project "$PROJECT"
   openssl rand -base64 32 | tr -d '\n' | gcloud secrets create SESSION_SECRET --data-file - --project "$PROJECT"
+  store_secret SMTP_PASSWORD
+  [[ -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]] && store_secret GOOGLE_OAUTH_CLIENT_SECRET
+  echo "Set up. Next: deploy/staging.sh deploy"
+}
 
-  cat <<EOF
-Set up. Before the first deploy, add the SMTP password (and, for Sign in with Google, its client secret):
-  printf '%s' 'the-smtp-password' | gcloud secrets create SMTP_PASSWORD --data-file - --project $PROJECT
-  printf '%s' 'the-client-secret' | gcloud secrets create GOOGLE_OAUTH_CLIENT_SECRET --data-file - --project $PROJECT
-EOF
+# Copies a secret from the environment (.env) into Secret Manager, or adds a new version of it.
+store_secret() {
+  local name="$1"
+  : "${!name:?Set $name in .env first}"
+  if gcloud secrets describe "$name" --project "$PROJECT" >/dev/null 2>&1; then
+    printf '%s' "${!name}" | gcloud secrets versions add "$name" --data-file - --project "$PROJECT"
+  else
+    printf '%s' "${!name}" | gcloud secrets create "$name" --data-file - --project "$PROJECT"
+  fi
 }
 
 deploy() {
@@ -77,7 +103,8 @@ deploy() {
   url="https://$SERVICE-$project_number.$REGION.run.app"
 
   env_vars="KOVOBOT_MODE=hosted,BILLING_ENABLED=false,PLAN_LIMITS_ENABLED=false,APP_URL=$url,API_URL=$url"
-  env_vars="$env_vars,SMTP_HOST=$SMTP_HOST,SMTP_USER=$SMTP_USER,EMAIL_FROM=$EMAIL_FROM"
+  env_vars="$env_vars,SMTP_HOST=$SMTP_HOST,SMTP_PORT=${SMTP_PORT:-587},SMTP_USER=$SMTP_USER,EMAIL_FROM=$EMAIL_FROM"
+  [[ -n "${LANDING_URL:-}" ]] && env_vars="$env_vars,LANDING_URL=$LANDING_URL"
   secrets="DATABASE_URL=DATABASE_URL:latest,SESSION_SECRET=SESSION_SECRET:latest,SMTP_PASSWORD=SMTP_PASSWORD:latest"
   if [[ -n "${GOOGLE_OAUTH_CLIENT_ID:-}" ]]; then
     env_vars="$env_vars,GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID"

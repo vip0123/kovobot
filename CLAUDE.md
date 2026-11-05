@@ -11,6 +11,9 @@ pnpm install
 pnpm db:up                 # Postgres on localhost:54329; tests need it running
 pnpm db:migrate
 pnpm dev                   # API on 3000, web app on 5173 (it forwards /api to the API)
+pnpm --filter @kovobot/landing dev        # the landing page on 5174 (a static site on GitHub Pages)
+pnpm customers:add someone@example.com    # let a tester in while sign-up is closed
+pnpm leads:list            # the waitlist as CSV; pnpm leads:announce emails it once at launch
 pnpm test                  # every test, each run in a fresh migrated database
 pnpm test apps/api/test/sign-in.test.ts   # one file
 pnpm test -t "works only once"            # tests whose name matches
@@ -26,7 +29,8 @@ With no `.env` the server starts self-hosted and writes sign-in links to its log
 - **The server's settings come only from `loadConfig`** in `packages/config`. A new server environment variable goes there, with a test, and into `.env.example`. Tooling reads its own: Vite's proxy reads `API_URL`, and tests read `TEST_DATABASE_URL`.
 - **Migrations** live in `packages/db/migrations/NNNN_name.sql`. Each runs before its release ships, while the previous release still serves, so it must work with the previous release's code: add now, drop in a later release. An applied migration is never edited (the migrator checks checksums); write a new one.
 - **Tests sit at three seams:** `loadConfig`, the HTTP API through `apps/api/test/harness.ts` against the real database (only email, Google and the clock are fake), and booting the server. The web pages are checked by hand in a browser.
-- **The web app calls the API on its own origin under `/api`.** Deployed, the API serves the web build, so the session cookie stays first-party.
+- **The web app calls the API on its own origin under `/api`.** Deployed, the API serves the web build, so the session cookie stays first-party. The landing page is the one cross-origin caller, and only of `POST /api/leads`.
+- **Prices and Plan limits come from `@kovobot/plans`**, the Plans-and-prices constant. Never hand-type a price in copy.
 
 ## Product
 

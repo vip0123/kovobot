@@ -31,6 +31,13 @@ export interface Config {
   googleSignIn: GoogleSignInSettings | null;
   /** The web app's production build, served by the API so both share one origin. Null in development. */
   webDistDir: string | null;
+  /**
+   * Whether new Customers can sign up. Hosted, it stays closed until launch:
+   * the landing page collects leads, and existing Customers can still sign in.
+   */
+  signUpOpen: boolean;
+  /** Origin of the landing page, allowed to post leads to the API. Null when there is none. */
+  landingUrl: string | null;
 }
 
 /** Every problem found in the environment, so they can all be fixed in one go. */
@@ -110,6 +117,27 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
     return true;
   };
 
+  const booleanSetting = (name: string, fallback: boolean): boolean => {
+    const raw = read(name);
+    if (!raw) return fallback;
+    if (raw !== "true" && raw !== "false") {
+      problems.push(`${name} must be "true" or "false".`);
+      return fallback;
+    }
+    return raw === "true";
+  };
+
+  const optionalOrigin = (name: string): string | null => {
+    const raw = read(name);
+    if (!raw) return null;
+    try {
+      return new URL(raw).origin;
+    } catch {
+      problems.push(`${name} must be a URL, not "${raw}".`);
+      return null;
+    }
+  };
+
   const port = (name: string, fallback: number): number => {
     const raw = read(name);
     if (!raw) return fallback;
@@ -179,6 +207,8 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
     googleSignIn:
       googleClientId && googleClientSecret ? { clientId: googleClientId, clientSecret: googleClientSecret } : null,
     webDistDir,
+    signUpOpen: booleanSetting("SIGN_UP_OPEN", !hosted),
+    landingUrl: optionalOrigin("LANDING_URL"),
   };
 
   if (problems.length > 0) throw new ConfigError(problems);

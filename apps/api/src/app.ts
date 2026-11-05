@@ -5,6 +5,7 @@ import type { Config } from "@kovobot/config";
 import type { Db } from "@kovobot/db";
 import { authRoutes } from "./auth/routes.ts";
 import { apiError, sameOriginWrites } from "./http.ts";
+import { leadRoutes } from "./leads.ts";
 import type { Mailer } from "./mailer.ts";
 
 /** Everything the API talks to outside its own code. Tests swap the edges. */
@@ -20,6 +21,8 @@ export interface AppDeps {
 export function createApp(deps: AppDeps) {
   const app = new Hono();
   app.get("/api/healthz", (c) => c.text("ok"));
+  // Leads come from the landing page's own origin, so they come before the same-origin check.
+  app.route("/api", leadRoutes(deps));
   app.use("/api/*", sameOriginWrites(deps.config.appUrl));
   app.route("/api", authRoutes(deps));
   app.all("/api/*", (c) => apiError(c, 404, "not_found", "There is no such API route."));

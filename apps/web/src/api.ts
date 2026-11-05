@@ -44,7 +44,7 @@ export function errorMessage(caught: unknown): string {
 }
 
 export const api = {
-  signInOptions: () => request<{ google: boolean }>("/auth/options"),
+  signInOptions: () => request<{ google: boolean; signUpOpen: boolean }>("/auth/options"),
   sendSignInLink: (email: string) => request<unknown>("/auth/email-link", { method: "POST", json: { email } }),
   confirmSignInLink: (token: string) =>
     request<{ customer: Customer }>("/auth/email-link/confirm", { method: "POST", json: { token } }),

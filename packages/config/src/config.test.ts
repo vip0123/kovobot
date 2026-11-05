@@ -142,3 +142,16 @@ describe("one origin for the web app and the API", () => {
     expect(configProblems({ PORT: "eighty" })).toEqual([expect.stringMatching(/^PORT must be a port number/)]);
   });
 });
+
+describe("sign-up and the landing page", () => {
+  test("self-hosted sign-up is open; hosted stays closed until launch unless SIGN_UP_OPEN says otherwise", () => {
+    expect(loadConfig({}).config.signUpOpen).toBe(true);
+    expect(loadConfig(hostedEnv).config.signUpOpen).toBe(false);
+    expect(loadConfig({ ...hostedEnv, SIGN_UP_OPEN: "true" }).config.signUpOpen).toBe(true);
+  });
+
+  test("the landing page's origin is read from LANDING_URL, and is optional", () => {
+    expect(loadConfig({}).config.landingUrl).toBeNull();
+    expect(loadConfig({ LANDING_URL: "https://kovobot.com/" }).config.landingUrl).toBe("https://kovobot.com");
+  });
+});

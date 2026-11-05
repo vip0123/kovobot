@@ -10,7 +10,7 @@ export default defineConfig(
   tseslint.configs.recommended,
   { languageOptions: { globals: globals.node } },
   {
-    files: ["apps/web/src/**/*.{ts,tsx}"],
+    files: ["apps/web/src/**/*.{ts,tsx}", "apps/landing/src/**/*.{ts,tsx}"],
     languageOptions: { globals: globals.browser },
     extends: [reactHooks.configs.flat.recommended],
   },

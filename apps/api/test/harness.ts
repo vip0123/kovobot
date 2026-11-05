@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { afterAll, expect, inject } from "vitest";
 import { loadConfig, type Env } from "@kovobot/config";
 import { createDb } from "@kovobot/db";
-import { createApp } from "../src/app.ts";
+import { type AppDeps, createApp } from "../src/app.ts";
 import type { Email } from "../src/mailer.ts";
-import { FakeGoogle } from "./fake-google.ts";
+import { FakeGoogle, type FakeGoogleAccount } from "./fake-google.ts";
 
 /**
  * The API wired to the real, migrated test database. Only the edges are fake:
@@ -31,15 +31,18 @@ export function startTestServer(env: Env = {}) {
     config.googleSignIn?.clientSecret ?? "google-sign-in-off",
     () => clock.now,
   );
-  const app = createApp({
+  const deps: AppDeps = {
     config,
     db,
     mailer: { send: async (email) => void outbox.push(email) },
     fetch: google.fetch,
     now: () => clock.now,
-  });
+  };
+  const app = createApp(deps);
 
   return {
+    /** What the app runs on, for calling modules the CLI commands use. */
+    deps,
     config,
     outbox,
     clock,
@@ -47,6 +50,13 @@ export function startTestServer(env: Env = {}) {
     /** A fresh browser: its own cookies, and the web app's Origin on every request. */
     browser: () => new Browser(app, config.appUrl),
     lastEmailTo,
+    /** Goes to Google, picks `account` there, and comes back. Returns the API's last answer. */
+    async signInWithGoogle(browser: Browser, account: FakeGoogleAccount): Promise<Response> {
+      const start = await browser.get("/api/auth/google");
+      expect(start.status).toBe(302);
+      const callback = new URL(google.approve(start.headers.get("location")!, account));
+      return browser.get(callback.pathname + callback.search);
+    },
     /** Signs `browser` in with an email link sent to `email`. */
     async signInByEmail(browser: Browser, email: string): Promise<void> {
       await browser.post("/api/auth/email-link", { email });
@@ -75,6 +85,11 @@ export async function currentCustomer(browser: Browser): Promise<{ id: string; e
 
 export function uniqueEmail(): string {
   return `ada.${randomUUID().slice(0, 8)}@example.com`;
+}
+
+/** A Google Workspace account on example.com: Google vouches that its owner owns the address. */
+export function googleAccount(email = uniqueEmail()): FakeGoogleAccount {
+  return { sub: `google-${email}`, email, email_verified: true, hd: "example.com" };
 }
 
 /** The token from the sign-in link in an email. */
@@ -116,7 +131,7 @@ export class Browser {
     this.cookies.set(name, value);
   }
 
-  private async send(path: string, init: { method: string; headers: Record<string, string>; body?: string }) {
+  async send(path: string, init: { method: string; headers: Record<string, string>; body?: string }) {
     const cookie = [...this.cookies].map(([name, value]) => `${name}=${value}`).join("; ");
     const response = await this.app.request(path, {
       ...init,

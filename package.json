@@ -8,12 +8,15 @@
   },
   "scripts": {
     "dev": "pnpm --parallel --filter @kovobot/api --filter @kovobot/web dev",
-    "build": "pnpm --filter @kovobot/web build",
+    "build": "pnpm --filter @kovobot/web --filter @kovobot/landing build",
     "lint": "eslint .",
-    "typecheck": "tsc -p tsconfig.json && tsc -p apps/web/tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p apps/web/tsconfig.json && tsc -p apps/landing/tsconfig.json",
     "test": "vitest run",
     "db:up": "docker compose up -d --wait postgres",
     "db:migrate": "node --env-file-if-exists=.env apps/api/src/migrate.ts",
+    "customers:add": "node --env-file-if-exists=.env apps/api/src/cli/customers-add.ts",
+    "leads:list": "node --env-file-if-exists=.env apps/api/src/cli/leads-list.ts",
+    "leads:announce": "node --env-file-if-exists=.env apps/api/src/cli/leads-announce.ts",
     "start": "node apps/api/src/main.ts"
   },
   "devDependencies": {
