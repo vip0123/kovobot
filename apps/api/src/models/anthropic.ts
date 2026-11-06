@@ -11,13 +11,17 @@ export function createAnthropicAdapter({ apiKey, baseURL }: { apiKey: string; ba
 
   return {
     async *stream({ model, instructions, conversation }) {
-      const usage: ModelUsage = {
+      // The model that answered: the one asked for, or the one that stood in when it declined.
+      const answered: ModelUsage = {
+        model,
         inputTokens: 0,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
         outputTokens: 0,
         reportedCostMicros: null,
       };
+      // Every attempt, as Anthropic bills it, when a fallback ran: the declined one included.
+      let attempts: ModelUsage[] | null = null;
       let stopReason: string | null = null;
       try {
         const stream = client.beta.messages.stream({
@@ -35,26 +39,40 @@ export function createAnthropicAdapter({ apiKey, baseURL }: { apiKey: string; ba
           switch (event.type) {
             case "message_start": {
               const start = event.message.usage;
-              usage.inputTokens = start.input_tokens;
-              usage.cacheReadTokens = start.cache_read_input_tokens ?? 0;
-              usage.cacheWriteTokens = start.cache_creation_input_tokens ?? 0;
+              answered.model = event.message.model;
+              answered.inputTokens = start.input_tokens;
+              answered.cacheReadTokens = start.cache_read_input_tokens ?? 0;
+              answered.cacheWriteTokens = start.cache_creation_input_tokens ?? 0;
               break;
             }
             case "content_block_delta":
               if (event.delta.type === "text_delta") yield { type: "text", text: event.delta.text };
               break;
-            case "message_delta":
-              usage.outputTokens = event.usage.output_tokens;
+            case "message_delta": {
+              answered.outputTokens = event.usage.output_tokens;
               stopReason = event.delta.stop_reason ?? null;
+              const iterations = event.usage.iterations ?? [];
+              if (iterations.length > 0) {
+                attempts = iterations.map((attempt) => ({
+                  model: ("model" in attempt && attempt.model) || model,
+                  inputTokens: attempt.input_tokens,
+                  cacheReadTokens: attempt.cache_read_input_tokens,
+                  cacheWriteTokens: attempt.cache_creation_input_tokens,
+                  outputTokens: attempt.output_tokens,
+                  reportedCostMicros: null,
+                }));
+              }
               break;
+            }
           }
         }
       } catch (error) {
         throw new ModelError("Anthropic's reply failed.", { cause: error });
       }
+      // The whole chain declined. Metering (ticket 07) will need these attempts' usage too.
       if (stopReason === "refusal") throw new ModelError("The model declined to answer.");
       if (stopReason === null) throw new ModelError("Anthropic's reply was cut off.");
-      yield { type: "done", usage };
+      yield { type: "done", usage: attempts ?? [answered] };
     },
   };
 }

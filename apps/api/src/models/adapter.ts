@@ -19,12 +19,17 @@ export interface ModelRequest {
 }
 
 /**
- * Usage in one shape for every Model provider, which metering prices from the
- * Price table (ticket 07). Thinking tokens count as output, as every Model
- * provider bills them.
+ * One billed attempt's usage, in one shape for every Model provider, which
+ * metering prices from the Price table (ticket 07). Thinking tokens count as
+ * output, as every Model provider bills them.
  */
 export interface ModelUsage {
-  /** Input read at the full rate: not from cache. */
+  /**
+   * The model these tokens were used on, priced at its own rates: the one asked
+   * for, or the Claude model that answered when it declined.
+   */
+  model: string;
+  /** Input at the full rate: neither read from nor written to the cache. */
   inputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
@@ -38,8 +43,12 @@ export interface ModelUsage {
 
 export type ModelEvent =
   | { type: "text"; text: string }
-  /** Usage is null when the Model provider didn't report it; such a call has no cost evidence. */
-  | { type: "done"; usage: ModelUsage | null };
+  /**
+   * One entry per billed attempt: two when a Claude model declined and another
+   * answered. Empty when the Model provider reported none; such a call has no
+   * cost evidence.
+   */
+  | { type: "done"; usage: ModelUsage[] };
 
 export interface ModelAdapter {
   /** One call to the Model provider: a single HTTP attempt, streamed. Throws ModelError if it fails. */

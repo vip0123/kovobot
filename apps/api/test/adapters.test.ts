@@ -1,5 +1,6 @@
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import type { ModelAdapter, ModelUsage } from "../src/models/adapter.ts";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { type ModelAdapter, ModelError, type ModelUsage } from "../src/models/adapter.ts";
+import { createModelAdapters } from "../src/models/adapters.ts";
 import { createAnthropicAdapter } from "../src/models/anthropic.ts";
 import { createGoogleAdapter } from "../src/models/google.ts";
 import { createOpenAIAdapter } from "../src/models/openai.ts";
@@ -22,9 +23,9 @@ const conversation = [
 ];
 
 /** Runs one call; returns the streamed pieces and the usage reported at the end. */
-async function call(adapter: ModelAdapter, model: string): Promise<{ pieces: string[]; usage: ModelUsage | null }> {
+async function call(adapter: ModelAdapter, model: string): Promise<{ pieces: string[]; usage: ModelUsage[] }> {
   const pieces: string[] = [];
-  let usage: ModelUsage | null | undefined;
+  let usage: ModelUsage[] | undefined;
   for await (const event of adapter.stream({ model, instructions: "You are Scout.", conversation })) {
     if (event.type === "text") pieces.push(event.text);
     else usage = event.usage;
@@ -33,6 +34,10 @@ async function call(adapter: ModelAdapter, model: string): Promise<{ pieces: str
   return { pieces, usage: usage! };
 }
 
+const anthropicAdapter = () => createAnthropicAdapter({ apiKey: "sk-ant-test", baseURL: anthropic.baseUrl });
+const geminiAdapter = () => createGoogleAdapter({ apiKey: "gemini-test", baseURL: gemini.baseUrl });
+const chatAdapter = () => createOpenAICompatibleAdapter({ apiKey: "sk-or-test", baseURL: chatCompletions.baseUrl });
+
 describe("every Model provider streams through one seam and reports usage in one shape", () => {
   test("OpenAI, on the Responses API", async () => {
     openai.replyWith("Fine, ", "thanks.");
@@ -40,7 +45,9 @@ describe("every Model provider streams through one seam and reports usage in one
 
     expect(await call(adapter, "gpt-6-luna")).toEqual({
       pieces: ["Fine, ", "thanks."],
-      usage: { inputTokens: 12, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 5, reportedCostMicros: null },
+      usage: [
+        { model: "gpt-6-luna", inputTokens: 12, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 5, reportedCostMicros: null },
+      ],
     });
   });
 
@@ -52,19 +59,21 @@ describe("every Model provider streams through one seam and reports usage in one
     const { usage } = await call(adapter, "grok-4.7");
     openai.costTicks = null;
 
-    expect(usage?.reportedCostMicros).toBe(420);
+    expect(usage).toMatchObject([{ model: "grok-4.7", reportedCostMicros: 420 }]);
   });
 
   test("Anthropic, on the Messages API, with the Bot's instructions as the system prompt and prompt caching on", async () => {
     anthropic.replyWith("Doing ", "well.");
-    const adapter = createAnthropicAdapter({ apiKey: "sk-ant-test", baseURL: anthropic.baseUrl });
 
-    expect(await call(adapter, "claude-opus-5-5")).toEqual({
+    expect(await call(anthropicAdapter(), "claude-opus-5-5")).toEqual({
       pieces: ["Doing ", "well."],
-      usage: { inputTokens: 20, cacheReadTokens: 300, cacheWriteTokens: 100, outputTokens: 7, reportedCostMicros: null },
+      usage: [
+        { model: "claude-opus-5-5", inputTokens: 20, cacheReadTokens: 300, cacheWriteTokens: 100, outputTokens: 7, reportedCostMicros: null },
+      ],
     });
     const { body, headers } = anthropic.requests.at(-1)!;
     expect(headers.authorization).toBe("Bearer sk-ant-test");
+    expect(headers["anthropic-beta"]).toContain("server-side-fallback-2026-07-01");
     expect(body).toMatchObject({
       model: "claude-opus-5-5",
       system: "You are Scout.",
@@ -75,20 +84,21 @@ describe("every Model provider streams through one seam and reports usage in one
   });
 
   test("Claude Haiku 5.5 has no server-side fallback, so none is asked for", async () => {
-    const adapter = createAnthropicAdapter({ apiKey: "sk-ant-test", baseURL: anthropic.baseUrl });
+    await call(anthropicAdapter(), "claude-haiku-5-5");
 
-    await call(adapter, "claude-haiku-5-5");
-
-    expect(anthropic.requests.at(-1)!.body.fallbacks).toBeUndefined();
+    const { body, headers } = anthropic.requests.at(-1)!;
+    expect(body.fallbacks).toBeUndefined();
+    expect(headers["anthropic-beta"] ?? "").not.toContain("server-side-fallback");
   });
 
   test("Google, on the Gemini API, with the instructions as the system instruction; thinking counts as output", async () => {
     gemini.replyWith("Very ", "well.");
-    const adapter = createGoogleAdapter({ apiKey: "gemini-test", baseURL: gemini.baseUrl });
 
-    expect(await call(adapter, "gemini-4-argon")).toEqual({
+    expect(await call(geminiAdapter(), "gemini-4-argon")).toEqual({
       pieces: ["Very ", "well."],
-      usage: { inputTokens: 20, cacheReadTokens: 10, cacheWriteTokens: 0, outputTokens: 10, reportedCostMicros: null },
+      usage: [
+        { model: "gemini-4-argon", inputTokens: 20, cacheReadTokens: 10, cacheWriteTokens: 0, outputTokens: 10, reportedCostMicros: null },
+      ],
     });
     const { body, path } = gemini.requests.at(-1)!;
     expect(path).toContain("gemini-4-argon");
@@ -102,17 +112,25 @@ describe("every Model provider streams through one seam and reports usage in one
     });
   });
 
-  test("OpenRouter, through the OpenAI-compatible adapter, carries OpenRouter's reported cost", async () => {
+  test("OpenRouter, through the OpenAI-compatible adapter, carries OpenRouter's reported cost and cache writes", async () => {
     chatCompletions.replyWith("Routed ", "reply.");
     chatCompletions.costUsd = 0.00042;
-    const adapter = createOpenAICompatibleAdapter({ apiKey: "sk-or-test", baseURL: chatCompletions.baseUrl });
 
-    const result = await call(adapter, "openrouter:mistralai/mistral-large");
+    const result = await call(chatAdapter(), "openrouter:mistralai/mistral-large");
     chatCompletions.costUsd = null;
 
     expect(result).toEqual({
       pieces: ["Routed ", "reply."],
-      usage: { inputTokens: 24, cacheReadTokens: 16, cacheWriteTokens: 0, outputTokens: 9, reportedCostMicros: 420 },
+      usage: [
+        {
+          model: "openrouter:mistralai/mistral-large",
+          inputTokens: 16,
+          cacheReadTokens: 16,
+          cacheWriteTokens: 8,
+          outputTokens: 9,
+          reportedCostMicros: 420,
+        },
+      ],
     });
     expect(chatCompletions.requests.at(-1)!.body).toMatchObject({
       model: "mistralai/mistral-large",
@@ -127,7 +145,135 @@ describe("every Model provider streams through one seam and reports usage in one
     const result = await call(adapter, "local:llama4");
 
     expect(result.pieces).toEqual(["Local ", "reply."]);
-    expect(result.usage?.reportedCostMicros).toBeNull();
+    expect(result.usage).toMatchObject([{ model: "local:llama4", reportedCostMicros: null }]);
     expect(chatCompletions.requests.at(-1)!.body.model).toBe("llama4");
+  });
+});
+
+describe("when a Claude model declines, another answers in the same call", () => {
+  test("each attempt's usage is reported against the model that ran it", async () => {
+    anthropic.replyWith("Here is ", "the answer.");
+    anthropic.endNextReply({ kind: "fall-back", to: "claude-opus-4-8" });
+
+    expect(await call(anthropicAdapter(), "claude-opus-5-5")).toEqual({
+      pieces: ["Here is ", "the answer."],
+      usage: [
+        { model: "claude-opus-5-5", inputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 400, outputTokens: 0, reportedCostMicros: null },
+        { model: "claude-opus-4-8", inputTokens: 20, cacheReadTokens: 300, cacheWriteTokens: 100, outputTokens: 7, reportedCostMicros: null },
+      ],
+    });
+  });
+});
+
+describe("a reply that doesn't finish is an error, never a finished reply", () => {
+  const fails = (adapter: ModelAdapter, model: string, message: RegExp) =>
+    expect(call(adapter, model)).rejects.toThrow(
+      expect.objectContaining({ name: "ModelError", message: expect.stringMatching(message) }),
+    );
+
+  test("Anthropic: a refusal the whole fallback chain shares", async () => {
+    anthropic.endNextReply({ kind: "stop", reason: "refusal" });
+    await fails(anthropicAdapter(), "claude-opus-5-5", /declined/);
+  });
+
+  test("Anthropic: a stream that stops before the reply ends", async () => {
+    anthropic.endNextReply({ kind: "cut-off" });
+    await fails(anthropicAdapter(), "claude-haiku-5-5", /cut off|failed/);
+  });
+
+  test("Anthropic: a failed request", async () => {
+    anthropic.endNextReply({ kind: "fail", status: 500 });
+    await fails(anthropicAdapter(), "claude-haiku-5-5", /failed/);
+  });
+
+  test("Gemini: a blocked prompt, with no reply at all", async () => {
+    gemini.endNextReply({ kind: "block-prompt", reason: "PROHIBITED_CONTENT" });
+    await fails(geminiAdapter(), "gemini-4-argon", /PROHIBITED_CONTENT/);
+  });
+
+  test("Gemini: a reply stopped for safety", async () => {
+    gemini.endNextReply({ kind: "stop", reason: "SAFETY" });
+    await fails(geminiAdapter(), "gemini-4-argon", /SAFETY/);
+  });
+
+  test("Gemini: a stream that stops before the reply ends", async () => {
+    gemini.endNextReply({ kind: "cut-off" });
+    await fails(geminiAdapter(), "gemini-4-argon", /cut off/);
+  });
+
+  test("OpenRouter: a reply its content filter stopped", async () => {
+    chatCompletions.endNextReply({ kind: "stop", reason: "content_filter" });
+    await fails(chatAdapter(), "openrouter:mistralai/mistral-large", /content_filter/);
+  });
+
+  test("OpenRouter: a stream that stops before the reply ends", async () => {
+    chatCompletions.endNextReply({ kind: "cut-off" });
+    await fails(chatAdapter(), "openrouter:mistralai/mistral-large", /cut off/);
+  });
+
+  test("OpenRouter: a failed request", async () => {
+    chatCompletions.endNextReply({ kind: "fail", status: 502 });
+    await fails(chatAdapter(), "openrouter:mistralai/mistral-large", /failed/);
+  });
+});
+
+describe("adapters built from the config", () => {
+  test("each key switches on its Model provider, called at that Model provider's own address with that key", async () => {
+    const seen: Array<{ url: string; headers: string }> = [];
+    // The network is the edge here: record where each SDK would call, and answer with an error.
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      const url = new URL(request.url);
+      seen.push({ url: `${url.origin}${url.pathname}`, headers: [...request.headers.values()].join(" ") });
+      return Response.json({ error: { type: "invalid_request_error", message: "Not really called." } }, { status: 400 });
+    });
+    try {
+      const adapters = createModelAdapters({
+        modelKeys: {
+          openai: "key-openai",
+          anthropic: "key-anthropic",
+          google: "key-google",
+          xai: "key-xai",
+          openrouter: "key-openrouter",
+        },
+        localModelsUrl: null,
+      });
+      expect(adapters.local).toBeNull();
+      const calls = [
+        ["openai", "gpt-6-luna"],
+        ["anthropic", "claude-haiku-5-5"],
+        ["google", "gemini-4-argon"],
+        ["xai", "grok-4.7"],
+        ["openrouter", "openrouter:mistralai/mistral-large"],
+      ] as const;
+      for (const [provider, model] of calls) await expect(call(adapters[provider]!, model)).rejects.toThrow(ModelError);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(seen.map(({ url }) => url)).toEqual([
+      "https://api.openai.com/v1/responses",
+      "https://api.anthropic.com/v1/messages",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-4-argon:streamGenerateContent",
+      "https://api.x.ai/v1/responses",
+      "https://openrouter.ai/api/v1/chat/completions",
+    ]);
+    ["openai", "anthropic", "google", "xai", "openrouter"].forEach((name, index) => {
+      expect(seen[index]!.headers).toContain(`key-${name}`);
+    });
+  });
+
+  test("no keys, no Model providers; a local model server only where one is set up", () => {
+    const none = { openai: null, anthropic: null, google: null, xai: null, openrouter: null };
+
+    expect(Object.values(createModelAdapters({ modelKeys: none, localModelsUrl: null }))).toEqual([
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
+    expect(createModelAdapters({ modelKeys: none, localModelsUrl: "http://127.0.0.1:11434/v1" }).local).not.toBeNull();
   });
 });

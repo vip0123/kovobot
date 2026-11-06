@@ -24,13 +24,15 @@ const OPENROUTER_ID = /^openrouter:[a-z0-9][\w.-]*\/[\w.:-]+$/i;
 const LOCAL_ID = /^local:[\w.:/-]{1,100}$/;
 
 /**
- * The model a Bot may be set to, or undefined. Any OpenRouter model is
- * allowed by its OpenRouter name; local models only where a local model
- * server is set up, which is never in the hosted service.
+ * The model a Bot may be set to, or undefined. Where OpenRouter is set up, any
+ * OpenRouter model is allowed by its OpenRouter name; local models only where a
+ * local model server is set up, which is never in the hosted service.
  */
 export function findModel(id: unknown, adapters: ModelAdapters): ModelInfo | undefined {
   if (typeof id !== "string") return undefined;
-  if (OPENROUTER_ID.test(id)) return { id, name: id.slice("openrouter:".length), provider: "openrouter" };
+  if (OPENROUTER_ID.test(id)) {
+    return adapters.openrouter ? { id, name: id.slice("openrouter:".length), provider: "openrouter" } : undefined;
+  }
   if (LOCAL_ID.test(id)) return adapters.local ? { id, name: `${id.slice("local:".length)} (local)`, provider: "local" } : undefined;
   return MODELS.find((model) => model.id === id);
 }
