@@ -1,0 +1,52 @@
+# Publishes the landing page (apps/landing) to GitHub Pages at kovobot.com.
+# Repository setup, once: Settings → Pages → Source "GitHub Actions", custom
+# domain kovobot.com; and Settings → Variables → APP_URL, the API's public URL
+# that the waitlist form posts to (the API must list kovobot.com as LANDING_URL).
+name: Landing page
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/landing/**
+      - packages/plans/**
+      - pnpm-lock.yaml
+      - .github/workflows/landing.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @kovobot/landing build
+        env:
+          VITE_APP_URL: ${{ vars.APP_URL }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/landing/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

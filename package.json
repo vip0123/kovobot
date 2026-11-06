@@ -1,0 +1,32 @@
+{
+  "name": "kovobot",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.29.3",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @kovobot/api --filter @kovobot/web dev",
+    "build": "pnpm --filter @kovobot/web --filter @kovobot/landing build",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json && tsc -p apps/web/tsconfig.json && tsc -p apps/landing/tsconfig.json",
+    "test": "vitest run",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:migrate": "node --env-file-if-exists=.env apps/api/src/migrate.ts",
+    "customers:add": "node --env-file-if-exists=.env apps/api/src/cli/customers-add.ts",
+    "leads:list": "node --env-file-if-exists=.env apps/api/src/cli/leads-list.ts",
+    "leads:announce": "node --env-file-if-exists=.env apps/api/src/cli/leads-announce.ts",
+    "start": "node apps/api/src/main.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.19.2",
+    "eslint": "^10.13.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.0.5"
+  }
+}
