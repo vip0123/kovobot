@@ -3,6 +3,7 @@
 #
 #   deploy/staging.sh setup    once per project: APIs, registry, database, secrets, service account
 #   deploy/staging.sh deploy   every release: build, migrate, then deploy
+#   deploy/staging.sh run …    one of the API's commands, e.g. run customers-add someone@example.com
 #
 # Needs the gcloud CLI, signed in (gcloud auth login), and these settings, taken
 # from the command line or else from .env:
@@ -132,11 +133,12 @@ deploy() {
 
   gcloud builds submit --tag "$image" --project "$PROJECT" .
 
-  # Migrate before the new release serves; the previous release keeps working meanwhile.
-  gcloud run jobs deploy "$SERVICE-migrate" --image "$image" --region "$REGION" --project "$PROJECT" \
+  # One job runs the API's commands with the service's own settings. Migrations
+  # go first; the previous release keeps serving meanwhile.
+  gcloud run jobs deploy "$SERVICE-command" --image "$image" --region "$REGION" --project "$PROJECT" \
     --command node --args apps/api/src/migrate.ts --service-account "$SERVICE_ACCOUNT" \
     --set-cloudsql-instances "$CLOUDSQL" --set-env-vars "$env_vars" --set-secrets "$secrets"
-  gcloud run jobs execute "$SERVICE-migrate" --region "$REGION" --project "$PROJECT" --wait
+  gcloud run jobs execute "$SERVICE-command" --region "$REGION" --project "$PROJECT" --wait
 
   gcloud run deploy "$SERVICE" --image "$image" --region "$REGION" --project "$PROJECT" \
     --service-account "$SERVICE_ACCOUNT" --add-cloudsql-instances "$CLOUDSQL" \
@@ -145,8 +147,20 @@ deploy() {
   echo "Staging is live at $url"
 }
 
+# Runs one of the API's commands (apps/api/src/cli/<name>.ts) against staging, e.g.
+#   deploy/staging.sh run customers-add someone@example.com
+# Its output is in the job's logs, linked from the execution.
+run_command() {
+  local name="${1:?Usage: deploy/staging.sh run <command> [arguments...]}"
+  shift
+  local args="apps/api/src/cli/$name.ts"
+  for arg in "$@"; do args="$args,$arg"; done
+  gcloud run jobs execute "$SERVICE-command" --region "$REGION" --project "$PROJECT" --args "$args" --wait
+}
+
 case "${1:-}" in
   setup) setup ;;
   deploy) deploy ;;
-  *) echo "Usage: deploy/staging.sh setup|deploy" >&2; exit 2 ;;
+  run) shift; run_command "$@" ;;
+  *) echo "Usage: deploy/staging.sh setup|deploy|run <command> [arguments...]" >&2; exit 2 ;;
 esac

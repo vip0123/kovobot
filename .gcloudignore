@@ -6,7 +6,6 @@
 **/dist/
 .env
 .env.*
-!.env.example
 docs/
 .scratch/
 .claude/
