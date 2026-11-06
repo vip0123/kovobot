@@ -36,7 +36,7 @@ export function createOpenAICompatibleAdapter({ apiKey, baseURL }: { apiKey: str
             usage = [
               {
                 model,
-                inputTokens: chunk.usage.prompt_tokens - cached - written,
+                inputTokens: Math.max(0, chunk.usage.prompt_tokens - cached - written),
                 cacheReadTokens: cached,
                 cacheWriteTokens: written,
                 outputTokens: chunk.usage.completion_tokens,
@@ -50,7 +50,9 @@ export function createOpenAICompatibleAdapter({ apiKey, baseURL }: { apiKey: str
         throw new ModelError("The model server's reply failed.", { cause: error });
       }
       if (finishReason === null) throw new ModelError("The model server's reply was cut off.");
-      if (finishReason === "content_filter") throw new ModelError("The model server stopped the reply (content_filter).");
+      if (finishReason === "content_filter") {
+        throw new ModelError("The model server stopped the reply (content_filter).", { usage });
+      }
       yield { type: "done", usage };
     },
   };

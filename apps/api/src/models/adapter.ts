@@ -26,7 +26,7 @@ export interface ModelRequest {
 export interface ModelUsage {
   /**
    * The model these tokens were used on, priced at its own rates: the one asked
-   * for, or the Claude model that answered when it declined.
+   * for, or the one a server-side fallback answered with when it declined.
    */
   model: string;
   /** Input at the full rate: neither read from nor written to the cache. */
@@ -44,9 +44,9 @@ export interface ModelUsage {
 export type ModelEvent =
   | { type: "text"; text: string }
   /**
-   * One entry per billed attempt: two when a Claude model declined and another
-   * answered. Empty when the Model provider reported none; such a call has no
-   * cost evidence.
+   * One entry per billed attempt: more than one when a server-side fallback
+   * ran. Empty when the Model provider reported none; such a call has no cost
+   * evidence.
    */
   | { type: "done"; usage: ModelUsage[] };
 
@@ -61,4 +61,11 @@ export type ModelAdapters = Record<ModelProvider, ModelAdapter | null>;
 /** A model call that failed, was refused, or ended without finishing its reply. */
 export class ModelError extends Error {
   override name = "ModelError";
+  /** What the attempts billed before it failed used, where the Model provider reported it: a refusal is billed too. */
+  readonly usage: ModelUsage[];
+
+  constructor(message: string, options: { cause?: unknown; usage?: ModelUsage[] } = {}) {
+    super(message, { cause: options.cause });
+    this.usage = options.usage ?? [];
+  }
 }

@@ -263,57 +263,57 @@ describe("Model providers", () => {
 });
 
 describe("with OpenRouter and a local model server set up", () => {
-  const routed = startTestServer({}, { openrouter: true, local: true });
+  const openRouterAndLocal = startTestServer({}, { openrouter: true, local: true });
 
-  async function routedBrowser(): Promise<Browser> {
-    const browser = routed.browser();
-    await routed.signInByEmail(browser, uniqueEmail());
+  async function openRouterAndLocalBrowser(): Promise<Browser> {
+    const browser = openRouterAndLocal.browser();
+    await openRouterAndLocal.signInByEmail(browser, uniqueEmail());
     return browser;
   }
 
   test("the model list offers any OpenRouter model and the local server's models", async () => {
-    const browser = await routedBrowser();
+    const browser = await openRouterAndLocalBrowser();
 
     expect(await (await browser.get("/api/models")).json()).toMatchObject({ openrouter: true, local: true });
   });
 
   test("a Bot chats on any OpenRouter model, picked by the name OpenRouter lists it under", async () => {
-    const browser = await routedBrowser();
+    const browser = await openRouterAndLocalBrowser();
     expect((await browser.post("/api/bots", { name: "Scout", model: "openrouter:not a model" })).status).toBe(400);
     const created = await browser.post("/api/bots", { name: "Scout", model: "openrouter:mistralai/mistral-large" });
     expect(created.status).toBe(201);
     const { bot } = (await created.json()) as { bot: Bot };
-    routed.chatCompletions.replyWith("Routed ", "hello.");
+    openRouterAndLocal.chatCompletions.replyWith("Routed ", "hello.");
 
     const response = await browser.post(`/api/bots/${bot.id}/messages`, { content: "Hi" });
     const events = await serverSentEvents(response);
 
     expect(events.at(-1)).toMatchObject({ event: "done", data: { message: { content: "Routed hello." } } });
-    expect(routed.chatCompletions.requests.at(-1)!.body.model).toBe("mistralai/mistral-large");
+    expect(openRouterAndLocal.chatCompletions.requests.at(-1)!.body.model).toBe("mistralai/mistral-large");
   });
 
   test("a self-hosted Bot chats on a model from the local model server", async () => {
-    const browser = await routedBrowser();
+    const browser = await openRouterAndLocalBrowser();
     const created = await browser.post("/api/bots", { name: "Scout", model: "local:llama4" });
     expect(created.status).toBe(201);
     const { bot } = (await created.json()) as { bot: Bot };
-    routed.chatCompletions.replyWith("Local ", "hello.");
+    openRouterAndLocal.chatCompletions.replyWith("Local ", "hello.");
 
     const response = await browser.post(`/api/bots/${bot.id}/messages`, { content: "Hi" });
     const events = await serverSentEvents(response);
 
     expect(events.at(-1)).toMatchObject({ event: "done", data: { message: { content: "Local hello." } } });
-    expect(routed.chatCompletions.requests.at(-1)!.body).toMatchObject({
+    expect(openRouterAndLocal.chatCompletions.requests.at(-1)!.body).toMatchObject({
       model: "llama4",
       messages: [{ role: "system" }, { role: "user", content: "Hi" }],
     });
   });
 
   test("a cut-off reply is reported as a failure, and nothing empty is saved", async () => {
-    const browser = await routedBrowser();
+    const browser = await openRouterAndLocalBrowser();
     const { bot } = (await (await browser.post("/api/bots", { name: "Scout", model: "local:llama4" })).json()) as { bot: Bot };
-    routed.chatCompletions.replyWith("");
-    routed.chatCompletions.endNextReply({ kind: "cut-off" });
+    openRouterAndLocal.chatCompletions.replyWith("");
+    openRouterAndLocal.chatCompletions.endNextReply({ kind: "cut-off" });
 
     const events = await serverSentEvents(await browser.post(`/api/bots/${bot.id}/messages`, { content: "Hi" }));
 

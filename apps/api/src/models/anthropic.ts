@@ -11,8 +11,8 @@ export function createAnthropicAdapter({ apiKey, baseURL }: { apiKey: string; ba
 
   return {
     async *stream({ model, instructions, conversation }) {
-      // The model that answered: the one asked for, or the one that stood in when it declined.
-      const answered: ModelUsage = {
+      // The answering attempt: the model asked for, or the one that stood in when it declined.
+      const answering: ModelUsage = {
         model,
         inputTokens: 0,
         cacheReadTokens: 0,
@@ -39,17 +39,17 @@ export function createAnthropicAdapter({ apiKey, baseURL }: { apiKey: string; ba
           switch (event.type) {
             case "message_start": {
               const start = event.message.usage;
-              answered.model = event.message.model;
-              answered.inputTokens = start.input_tokens;
-              answered.cacheReadTokens = start.cache_read_input_tokens ?? 0;
-              answered.cacheWriteTokens = start.cache_creation_input_tokens ?? 0;
+              answering.model = event.message.model;
+              answering.inputTokens = start.input_tokens;
+              answering.cacheReadTokens = start.cache_read_input_tokens ?? 0;
+              answering.cacheWriteTokens = start.cache_creation_input_tokens ?? 0;
               break;
             }
             case "content_block_delta":
               if (event.delta.type === "text_delta") yield { type: "text", text: event.delta.text };
               break;
             case "message_delta": {
-              answered.outputTokens = event.usage.output_tokens;
+              answering.outputTokens = event.usage.output_tokens;
               stopReason = event.delta.stop_reason ?? null;
               const iterations = event.usage.iterations ?? [];
               if (iterations.length > 0) {
@@ -69,10 +69,11 @@ export function createAnthropicAdapter({ apiKey, baseURL }: { apiKey: string; ba
       } catch (error) {
         throw new ModelError("Anthropic's reply failed.", { cause: error });
       }
-      // The whole chain declined. Metering (ticket 07) will need these attempts' usage too.
-      if (stopReason === "refusal") throw new ModelError("The model declined to answer.");
+      const usage = attempts ?? [answering];
+      // Every model asked declined: still billed, so the error carries what they used.
+      if (stopReason === "refusal") throw new ModelError("The model declined to answer.", { usage });
       if (stopReason === null) throw new ModelError("Anthropic's reply was cut off.");
-      yield { type: "done", usage: attempts ?? [answered] };
+      yield { type: "done", usage };
     },
   };
 }

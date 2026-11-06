@@ -47,7 +47,7 @@ export function createOpenAIAdapter({ apiKey, baseURL }: { apiKey: string; baseU
                 usage: [
                   {
                     model,
-                    inputTokens: usage.input_tokens - cached - written,
+                    inputTokens: Math.max(0, usage.input_tokens - cached - written),
                     cacheReadTokens: cached,
                     cacheWriteTokens: written,
                     outputTokens: usage.output_tokens,

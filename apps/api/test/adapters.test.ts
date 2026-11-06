@@ -166,54 +166,88 @@ describe("when a Claude model declines, another answers in the same call", () =>
 });
 
 describe("a reply that doesn't finish is an error, never a finished reply", () => {
-  const fails = (adapter: ModelAdapter, model: string, message: RegExp) =>
-    expect(call(adapter, model)).rejects.toThrow(
-      expect.objectContaining({ name: "ModelError", message: expect.stringMatching(message) }),
+  /** The error a call ends with; it fails the test if the call finishes instead. */
+  const failure = (adapter: ModelAdapter, model: string) =>
+    call(adapter, model).then(
+      () => expect.unreachable("the call finished"),
+      (error: unknown) => error,
     );
+  const openaiAdapter = () => createOpenAIAdapter({ apiKey: FAKE_OPENAI_KEY, baseURL: openai.baseUrl });
 
-  test("Anthropic: a refusal the whole fallback chain shares", async () => {
+  test("OpenAI: a failed request", async () => {
+    openai.failWith(500);
+    expect(await failure(openaiAdapter(), "gpt-6-luna")).toMatchObject({ name: "ModelError" });
+    openai.replyWith("Hello!");
+  });
+
+  test("OpenAI: a stream that breaks before the reply ends", async () => {
+    openai.failMidStream("Part ");
+    expect(await failure(openaiAdapter(), "gpt-6-luna")).toMatchObject({ name: "ModelError" });
+    openai.replyWith("Hello!");
+  });
+
+  test("Anthropic: a refusal the whole fallback chain shares, carrying what the declined attempt used", async () => {
     anthropic.endNextReply({ kind: "stop", reason: "refusal" });
-    await fails(anthropicAdapter(), "claude-opus-5-5", /declined/);
+    expect(await failure(anthropicAdapter(), "claude-opus-5-5")).toMatchObject({
+      name: "ModelError",
+      message: expect.stringMatching(/declined/),
+      usage: [{ model: "claude-opus-5-5", inputTokens: 20, outputTokens: 7 }],
+    });
   });
 
   test("Anthropic: a stream that stops before the reply ends", async () => {
     anthropic.endNextReply({ kind: "cut-off" });
-    await fails(anthropicAdapter(), "claude-haiku-5-5", /cut off|failed/);
+    expect(await failure(anthropicAdapter(), "claude-haiku-5-5")).toMatchObject({ name: "ModelError" });
   });
 
   test("Anthropic: a failed request", async () => {
     anthropic.endNextReply({ kind: "fail", status: 500 });
-    await fails(anthropicAdapter(), "claude-haiku-5-5", /failed/);
+    expect(await failure(anthropicAdapter(), "claude-haiku-5-5")).toMatchObject({ name: "ModelError", message: expect.stringMatching(/failed/) });
   });
 
-  test("Gemini: a blocked prompt, with no reply at all", async () => {
+  test("Gemini: a blocked prompt, with no reply at all, carrying what the prompt used", async () => {
     gemini.endNextReply({ kind: "block-prompt", reason: "PROHIBITED_CONTENT" });
-    await fails(geminiAdapter(), "gemini-4-argon", /PROHIBITED_CONTENT/);
+    expect(await failure(geminiAdapter(), "gemini-4-argon")).toMatchObject({
+      name: "ModelError",
+      message: expect.stringMatching(/PROHIBITED_CONTENT/),
+      usage: [{ model: "gemini-4-argon", inputTokens: 20 }],
+    });
   });
 
   test("Gemini: a reply stopped for safety", async () => {
     gemini.endNextReply({ kind: "stop", reason: "SAFETY" });
-    await fails(geminiAdapter(), "gemini-4-argon", /SAFETY/);
+    expect(await failure(geminiAdapter(), "gemini-4-argon")).toMatchObject({
+      message: expect.stringMatching(/SAFETY/),
+      usage: [{ model: "gemini-4-argon" }],
+    });
   });
 
   test("Gemini: a stream that stops before the reply ends", async () => {
     gemini.endNextReply({ kind: "cut-off" });
-    await fails(geminiAdapter(), "gemini-4-argon", /cut off/);
+    expect(await failure(geminiAdapter(), "gemini-4-argon")).toMatchObject({ message: expect.stringMatching(/cut off/) });
   });
 
-  test("OpenRouter: a reply its content filter stopped", async () => {
+  test("Gemini: a failed request", async () => {
+    gemini.endNextReply({ kind: "fail", status: 503 });
+    expect(await failure(geminiAdapter(), "gemini-4-argon")).toMatchObject({ message: expect.stringMatching(/failed/) });
+  });
+
+  test("OpenRouter: a reply its content filter stopped, carrying what it used", async () => {
     chatCompletions.endNextReply({ kind: "stop", reason: "content_filter" });
-    await fails(chatAdapter(), "openrouter:mistralai/mistral-large", /content_filter/);
+    expect(await failure(chatAdapter(), "openrouter:mistralai/mistral-large")).toMatchObject({
+      message: expect.stringMatching(/content_filter/),
+      usage: [{ model: "openrouter:mistralai/mistral-large", outputTokens: 9 }],
+    });
   });
 
   test("OpenRouter: a stream that stops before the reply ends", async () => {
     chatCompletions.endNextReply({ kind: "cut-off" });
-    await fails(chatAdapter(), "openrouter:mistralai/mistral-large", /cut off/);
+    expect(await failure(chatAdapter(), "openrouter:mistralai/mistral-large")).toMatchObject({ message: expect.stringMatching(/cut off/) });
   });
 
   test("OpenRouter: a failed request", async () => {
     chatCompletions.endNextReply({ kind: "fail", status: 502 });
-    await fails(chatAdapter(), "openrouter:mistralai/mistral-large", /failed/);
+    expect(await failure(chatAdapter(), "openrouter:mistralai/mistral-large")).toMatchObject({ message: expect.stringMatching(/failed/) });
   });
 });
 
@@ -246,7 +280,9 @@ describe("adapters built from the config", () => {
         ["xai", "grok-4.7"],
         ["openrouter", "openrouter:mistralai/mistral-large"],
       ] as const;
-      for (const [provider, model] of calls) await expect(call(adapters[provider]!, model)).rejects.toThrow(ModelError);
+      for (const [modelProvider, model] of calls) {
+        await expect(call(adapters[modelProvider]!, model)).rejects.toThrow(ModelError);
+      }
     } finally {
       vi.unstubAllGlobals();
     }

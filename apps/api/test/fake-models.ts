@@ -33,6 +33,8 @@ abstract class FakeModelServer {
   protected deltas: string[] = ["Hello!"];
   private ending: Ending = { kind: "finish" };
   private server: Server | undefined;
+  /** The endings this Model provider's API can produce. */
+  protected abstract readonly endings: ReadonlySet<Ending["kind"]>;
 
   /** The next replies stream in these pieces. */
   replyWith(...deltas: string[]): void {
@@ -41,6 +43,7 @@ abstract class FakeModelServer {
 
   /** The next reply ends this way; see `Ending`. */
   endNextReply(ending: Ending): void {
+    if (!this.endings.has(ending.kind)) throw new Error(`${this.constructor.name} can't end a reply with ${ending.kind}.`);
     this.ending = ending;
   }
 
@@ -77,6 +80,8 @@ abstract class FakeModelServer {
 
 /** Anthropic's Messages API, streamed: POST /v1/messages. */
 export class FakeAnthropic extends FakeModelServer {
+  protected readonly endings = new Set<Ending["kind"]>(["finish", "cut-off", "stop", "fall-back", "fail"]);
+
   protected respond(path: string, body: Record<string, unknown>, response: ServerResponse, ending: Ending): void {
     if (!path.startsWith("/v1/messages")) {
       response.writeHead(404).end();
@@ -135,6 +140,8 @@ export class FakeAnthropic extends FakeModelServer {
 
 /** Google's Gemini API, streamed: POST /v1beta/models/{model}:streamGenerateContent?alt=sse. */
 export class FakeGemini extends FakeModelServer {
+  protected readonly endings = new Set<Ending["kind"]>(["finish", "cut-off", "stop", "block-prompt", "fail"]);
+
   protected respond(path: string, _body: Record<string, unknown>, response: ServerResponse, ending: Ending): void {
     if (!path.includes(":streamGenerateContent")) {
       response.writeHead(404).end();
@@ -170,6 +177,7 @@ export class FakeGemini extends FakeModelServer {
 
 /** The OpenAI-compatible Chat Completions API (OpenRouter, local servers): POST /v1/chat/completions. */
 export class FakeChatCompletions extends FakeModelServer {
+  protected readonly endings = new Set<Ending["kind"]>(["finish", "cut-off", "stop", "fail"]);
   /** The cost the server reports with usage, in US dollars, as OpenRouter does; null reports none. */
   costUsd: number | null = null;
 

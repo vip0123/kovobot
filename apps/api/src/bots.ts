@@ -242,8 +242,8 @@ async function listMessages(db: Db, conversationId: string): Promise<Message[]> 
 
 /**
  * What the model sees of the conversation, oldest first: no more than the
- * latest 50 messages, so a long conversation never outgrows it, starting at a
- * step (WINDOW_STEP) and on the Customer's message, as Model providers expect.
+ * latest MESSAGES_SENT_TO_MODEL, so a long conversation never outgrows it,
+ * starting at a WINDOW_STEP and on the Customer's message, as Model providers expect.
  */
 async function recentMessages(db: Db, conversationId: string): Promise<Message[]> {
   const { rows: counted } = await db.query<{ count: number }>(
