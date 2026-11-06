@@ -14,6 +14,7 @@
 #                                          stores SMTP_PASSWORD in Secret Manager
 #   GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET
 #                                          optional: turn on Sign in with Google
+#   ANTHROPIC_WORKSPACE_ID                 for an Anthropic key not scoped to a workspace (optional)
 #   OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, XAI_API_KEY, OPENROUTER_API_KEY
 #                                          our Model provider keys; deploy stores each one set
 #   LANDING_URL                            optional: the landing page that posts leads,

@@ -64,7 +64,7 @@ export function botRoutes(deps: AppDeps) {
     const name = botName(body.name);
     if (!name) return invalidName(c);
     const model = chooseModel(body.model, deps.models);
-    if ("refused" in model) return apiError(c, 400, model.refused, model.message);
+    if ("code" in model) return apiError(c, 400, model.code, model.message);
     const bot = await createBot(deps.db, c.get("customer").id, { name, model: model.id }, deps.now());
     return c.json({ bot }, 201);
   });
@@ -75,7 +75,7 @@ export function botRoutes(deps: AppDeps) {
     const name = body.name === undefined ? undefined : botName(body.name);
     if (name === null) return invalidName(c);
     const model = body.model === undefined ? undefined : chooseModel(body.model, deps.models);
-    if (model && "refused" in model) return apiError(c, 400, model.refused, model.message);
+    if (model && "code" in model) return apiError(c, 400, model.code, model.message);
     if (name === undefined && model === undefined) return invalidName(c);
     const bot = await updateBot(deps.db, c.get("customer").id, c.req.param("id"), { name, model: model?.id });
     return bot ? c.json({ bot }) : botNotFound(c);
@@ -156,10 +156,10 @@ function botNotFound(c: Parameters<typeof apiError>[0]) {
 }
 
 /** The model a Bot is being set to, or why it can't be: unknown, or its Model provider isn't set up here. */
-function chooseModel(id: unknown, models: ModelAdapters): ModelInfo | { refused: string; message: string } {
+function chooseModel(id: unknown, adapters: ModelAdapters): ModelInfo | { code: string; message: string } {
   const model = describeModel(id);
-  if (!model) return { refused: "unknown_model", message: "Pick one of the listed models." };
-  if (!models[model.provider]) return { refused: "model_unavailable", message: `${model.name} isn't set up here. Pick another model.` };
+  if (!model) return { code: "unknown_model", message: "Pick one of the listed models." };
+  if (!adapters[model.provider]) return { code: "model_unavailable", message: `${model.name} isn't set up here. Pick another model.` };
   return model;
 }
 

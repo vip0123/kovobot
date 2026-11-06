@@ -1,7 +1,7 @@
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api, type Bot, errorMessage, type Message, type ModelCatalog } from "../api.ts";
-import { canUse, ModelPicker } from "../ModelPicker.tsx";
+import { canUse, ModelPicker, modelLabel } from "../ModelPicker.tsx";
 import { AppShell } from "../AppShell.tsx";
 
 export function BotPage() {
@@ -51,7 +51,6 @@ function BotChat() {
 }
 
 function BotHeader({ bot, catalog, onChange }: { bot: Bot; catalog: ModelCatalog; onChange: (bot: Bot) => void }) {
-  const modelName = catalog.models.find((model) => model.id === bot.model)?.name ?? bot.model.replace(/^(openrouter|local):/, "");
   const [switching, setSwitching] = useState(false);
   const [model, setModel] = useState(bot.model);
   const navigate = useNavigate();
@@ -114,7 +113,7 @@ function BotHeader({ bot, catalog, onChange }: { bot: Bot; catalog: ModelCatalog
       ) : (
         <div className="bot-title">
           <h1>{bot.name}</h1>
-          <span className="muted small">{modelName}</span>
+          <span className="muted small">{modelLabel(catalog, bot.model)}</span>
           <div className="actions">
             <button type="button" className="button secondary small" onClick={() => setRenaming(true)}>
               Rename

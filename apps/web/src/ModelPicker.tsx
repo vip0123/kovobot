@@ -9,17 +9,26 @@ const MODEL_PROVIDER_NAMES: Record<string, string> = {
 
 const OPENROUTER = "openrouter:";
 const LOCAL = "local:";
+// The shapes the API accepts (apps/api/src/models/catalog.ts): "openrouter:<organisation>/<model>", "local:<model>".
+const OPENROUTER_ID = /^openrouter:[a-z0-9][\w.-]*\/[\w.:-]+$/i;
+const LOCAL_ID = /^local:[\w.:/-]{1,100}$/;
 
 /** Whether a Bot can be set to this model here: its Model provider is set up, and an OpenRouter or local model is named. */
 export function canUse(catalog: ModelCatalog, model: string): boolean {
-  if (model.startsWith(OPENROUTER)) return catalog.openrouter && model.length > OPENROUTER.length;
-  if (model.startsWith(LOCAL)) return catalog.local && model.length > LOCAL.length;
+  if (model.startsWith(OPENROUTER)) return catalog.openrouter && OPENROUTER_ID.test(model);
+  if (model.startsWith(LOCAL)) return catalog.local && LOCAL_ID.test(model);
   return catalog.models.some((listed) => listed.id === model && listed.available);
+}
+
+/** How a Bot's model is shown: its name, marked when its Model provider isn't set up here any more. */
+export function modelLabel(catalog: ModelCatalog, model: string): string {
+  const name = catalog.models.find((listed) => listed.id === model)?.name ?? model.replace(/^(openrouter|local):/, "");
+  return canUse(catalog, model) ? name : `${name} (not set up here)`;
 }
 
 /** The first model a new Bot can use here, or "" when none can. */
 export function firstAvailableModel(catalog: ModelCatalog): string {
-  return catalog.models.find((model) => model.available)?.id ?? (catalog.openrouter ? OPENROUTER : "");
+  return catalog.models.find((model) => model.available)?.id ?? (catalog.openrouter ? OPENROUTER : catalog.local ? LOCAL : "");
 }
 
 /** Every model a Bot can use here, grouped by Model provider, plus any OpenRouter or local model by name. */

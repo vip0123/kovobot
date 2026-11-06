@@ -182,6 +182,10 @@ describe("Model provider keys", () => {
   test("an Anthropic key that isn't scoped to a workspace is used in the workspace named alongside it", () => {
     expect(loadConfig({ ANTHROPIC_API_KEY: "sk-ant", ANTHROPIC_WORKSPACE_ID: "wrkspc_01" }).config.anthropicWorkspaceId).toBe("wrkspc_01");
     expect(loadConfig({ ANTHROPIC_API_KEY: "sk-ant" }).config.anthropicWorkspaceId).toBeNull();
+    expect(loadConfig({ ANTHROPIC_WORKSPACE_ID: "  " }).config.anthropicWorkspaceId).toBeNull();
+    expect(loadConfig({ ANTHROPIC_WORKSPACE_ID: "my workspace" }).warnings).toContainEqual(
+      expect.stringMatching(/^ANTHROPIC_WORKSPACE_ID doesn't look like a workspace id/),
+    );
   });
 
   test("a local model server is for self-hosted installs only: the hosted service never calls a URL it is given", () => {

@@ -233,6 +233,9 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
     localModelsUrl: null,
     anthropicWorkspaceId: read("ANTHROPIC_WORKSPACE_ID") ?? null,
   };
+  if (config.anthropicWorkspaceId && !/^wrkspc_\w+$/.test(config.anthropicWorkspaceId)) {
+    warnings.push("ANTHROPIC_WORKSPACE_ID doesn't look like a workspace id (wrkspc_...): Anthropic will refuse every call.");
+  }
   const localModelsUrl = read("OPENAI_COMPATIBLE_BASE_URL");
   if (localModelsUrl && hosted) {
     problems.push(

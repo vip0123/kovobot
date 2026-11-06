@@ -21,10 +21,10 @@ async function createBot(browser: Browser, name = "Scout", model = "gpt-6-luna")
   return ((await response.json()) as { bot: Bot }).bot;
 }
 
-function patchBot(browser: Browser, bot: Bot, change: { name?: string; model?: string }) {
+function patchBot(browser: Browser, bot: Bot, change: { name?: string; model?: string }, on = server) {
   return browser.send(`/api/bots/${bot.id}`, {
     method: "PATCH",
-    headers: { origin: server.config.appUrl, "content-type": "application/json" },
+    headers: { origin: on.config.appUrl, "content-type": "application/json" },
     body: JSON.stringify(change),
   });
 }
@@ -280,8 +280,11 @@ describe("Model providers", () => {
   test("OpenRouter and local models are refused where neither is set up", async () => {
     const browser = await signedInBrowser();
 
-    expect((await browser.post("/api/bots", { name: "Scout", model: "openrouter:mistralai/mistral-large" })).status).toBe(400);
-    expect((await browser.post("/api/bots", { name: "Scout", model: "local:llama4" })).status).toBe(400);
+    for (const model of ["openrouter:mistralai/mistral-large", "local:llama4"]) {
+      const response = await browser.post("/api/bots", { name: "Scout", model });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: "model_unavailable" } });
+    }
   });
 });
 
@@ -374,14 +377,12 @@ describe("a Bot whose Model provider's key was removed after it was set up", () 
 
   test("it can still be renamed, and switched to a model that is set up", async () => {
     const { browser, bot } = await botOn("openrouter:mistralai/mistral-large");
-    const patch = (change: object) =>
-      browser.send(`/api/bots/${bot.id}`, {
-        method: "PATCH",
-        headers: { origin: keyless.config.appUrl, "content-type": "application/json" },
-        body: JSON.stringify(change),
-      });
 
-    expect(await (await patch({ name: "Scout II" })).json()).toMatchObject({ bot: { name: "Scout II", model: bot.model } });
-    expect(await (await patch({ model: "claude-haiku-5-5" })).json()).toMatchObject({ bot: { model: "claude-haiku-5-5" } });
+    expect(await (await patchBot(browser, bot, { name: "Scout II" }, keyless)).json()).toMatchObject({
+      bot: { name: "Scout II", model: bot.model },
+    });
+    expect(await (await patchBot(browser, bot, { model: "claude-haiku-5-5" }, keyless)).json()).toMatchObject({
+      bot: { model: "claude-haiku-5-5" },
+    });
   });
 });
