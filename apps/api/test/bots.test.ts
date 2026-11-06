@@ -21,6 +21,14 @@ async function createBot(browser: Browser, name = "Scout", model = "gpt-6-luna")
   return ((await response.json()) as { bot: Bot }).bot;
 }
 
+function patchBot(browser: Browser, bot: Bot, change: { name?: string; model?: string }, on = server) {
+  return browser.send(`/api/bots/${bot.id}`, {
+    method: "PATCH",
+    headers: { origin: on.config.appUrl, "content-type": "application/json" },
+    body: JSON.stringify(change),
+  });
+}
+
 async function listBots(browser: Browser): Promise<Bot[]> {
   return ((await (await browser.get("/api/bots")).json()) as { bots: Bot[] }).bots;
 }
@@ -84,6 +92,21 @@ describe("Bots", () => {
     const unknownModel = await browser.post("/api/bots", { name: "Scout", model: "gpt-0-imaginary" });
     expect(unknownModel.status).toBe(400);
     expect(await unknownModel.json()).toMatchObject({ error: { code: "unknown_model" } });
+  });
+
+  test("a Bot can't be set to a model whose Model provider isn't set up here", async () => {
+    const browser = await signedInBrowser();
+
+    const created = await browser.post("/api/bots", { name: "Scout", model: "gemini-4-argon" });
+    expect(created.status).toBe(400);
+    expect(await created.json()).toMatchObject({
+      error: { code: "model_unavailable", message: "Gemini 4 Argon isn't set up here. Pick another model." },
+    });
+    const bot = await createBot(browser);
+    const switched = await patchBot(browser, bot, { model: "grok-4.7" });
+    expect(switched.status).toBe(400);
+    expect(await switched.json()).toMatchObject({ error: { code: "model_unavailable" } });
+    expect((await listBots(browser)).find(({ id }) => id === bot.id)).toMatchObject({ model: "gpt-6-luna" });
   });
 
   test("the models a Bot can use are listed", async () => {
@@ -257,8 +280,11 @@ describe("Model providers", () => {
   test("OpenRouter and local models are refused where neither is set up", async () => {
     const browser = await signedInBrowser();
 
-    expect((await browser.post("/api/bots", { name: "Scout", model: "openrouter:mistralai/mistral-large" })).status).toBe(400);
-    expect((await browser.post("/api/bots", { name: "Scout", model: "local:llama4" })).status).toBe(400);
+    for (const model of ["openrouter:mistralai/mistral-large", "local:llama4"]) {
+      const response = await browser.post("/api/bots", { name: "Scout", model });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: "model_unavailable" } });
+    }
   });
 });
 
@@ -323,18 +349,40 @@ describe("with OpenRouter and a local model server set up", () => {
   });
 });
 
-describe("without an OpenAI key", () => {
+describe("a Bot whose Model provider's key was removed after it was set up", () => {
   const keyless = startTestServer({}, { openai: false });
 
-  test("chatting says the model isn't available instead of failing silently", async () => {
+  async function botOn(model: string): Promise<{ browser: Browser; bot: Bot }> {
     const browser = keyless.browser();
     await keyless.signInByEmail(browser, uniqueEmail());
-    const bot = ((await (await browser.post("/api/bots", { name: "Scout", model: "gpt-6-luna" })).json()) as { bot: Bot })
-      .bot;
+    const { bot } = (await (await browser.post("/api/bots", { name: "Scout", model: "claude-haiku-5-5" })).json()) as { bot: Bot };
+    // As if the Bot had been set to this model while its Model provider's key was set.
+    await keyless.deps.db.query("UPDATE bots SET model = $1 WHERE id = $2", [model, bot.id]);
+    return { browser, bot: { ...bot, model } };
+  }
+
+  test.each([
+    ["gpt-6-luna", "GPT-6 Luna"],
+    ["openrouter:mistralai/mistral-large", "mistralai/mistral-large"],
+  ])("chatting on %s says, by the model's name, that it isn't available", async (model, name) => {
+    const { browser, bot } = await botOn(model);
 
     const response = await browser.post(`/api/bots/${bot.id}/messages`, { content: "Hi" });
 
     expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({ error: { code: "model_unavailable" } });
+    expect(await response.json()).toMatchObject({
+      error: { code: "model_unavailable", message: `${name} isn't available here right now.` },
+    });
+  });
+
+  test("it can still be renamed, and switched to a model that is set up", async () => {
+    const { browser, bot } = await botOn("openrouter:mistralai/mistral-large");
+
+    expect(await (await patchBot(browser, bot, { name: "Scout II" }, keyless)).json()).toMatchObject({
+      bot: { name: "Scout II", model: bot.model },
+    });
+    expect(await (await patchBot(browser, bot, { model: "claude-haiku-5-5" }, keyless)).json()).toMatchObject({
+      bot: { model: "claude-haiku-5-5" },
+    });
   });
 });

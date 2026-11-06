@@ -5,9 +5,23 @@ import { type ModelAdapter, ModelError, type ModelUsage } from "./adapter.ts";
 const MODELS_WITH_FALLBACK = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"]);
 
 /** Anthropic's Messages API, through the official SDK (ADR 0005), with prompt caching on. */
-export function createAnthropicAdapter({ apiKey, baseURL }: { apiKey: string; baseURL?: string }): ModelAdapter {
+export function createAnthropicAdapter({
+  apiKey,
+  baseURL,
+  workspaceId,
+}: {
+  apiKey: string;
+  baseURL?: string;
+  /** For a key that isn't scoped to a workspace: Anthropic refuses its calls unless they name one. */
+  workspaceId?: string | null;
+}): ModelAdapter {
   // One HTTP attempt per call, never a hidden retry: each attempt gets its own Hold (ADR 0004).
-  const client = new Anthropic({ apiKey, baseURL, maxRetries: 0 });
+  const client = new Anthropic({
+    apiKey,
+    baseURL,
+    maxRetries: 0,
+    ...(workspaceId ? { defaultHeaders: { "anthropic-workspace-id": workspaceId } } : {}),
+  });
 
   return {
     async *stream({ model, instructions, conversation }) {
