@@ -10,6 +10,7 @@ export function createGoogleAdapter({ apiKey, baseURL }: { apiKey: string; baseU
     async *stream({ model, instructions, conversation }) {
       let usage: ModelUsage | null = null;
       let blocked: string | null = null;
+      let finished = false;
       try {
         const chunks = await client.models.generateContentStream({
           model,
@@ -20,7 +21,9 @@ export function createGoogleAdapter({ apiKey, baseURL }: { apiKey: string; baseU
           config: { systemInstruction: instructions },
         });
         for await (const chunk of chunks) {
+          if (chunk.promptFeedback?.blockReason) blocked = chunk.promptFeedback.blockReason;
           const candidate = chunk.candidates?.[0];
+          if (candidate?.finishReason) finished = true;
           for (const part of candidate?.content?.parts ?? []) {
             if (part.text && !part.thought) yield { type: "text", text: part.text };
           }
@@ -43,6 +46,7 @@ export function createGoogleAdapter({ apiKey, baseURL }: { apiKey: string; baseU
         throw new ModelError("Gemini's reply failed.", { cause: error });
       }
       if (blocked) throw new ModelError(`Gemini stopped the reply (${blocked}).`);
+      if (!finished) throw new ModelError("Gemini's reply was cut off.");
       yield { type: "done", usage };
     },
   };

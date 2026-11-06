@@ -127,6 +127,8 @@ export function botRoutes(deps: AppDeps) {
           reply += event.text;
           await send("delta", { text: event.text });
         }
+        // An empty reply would break the conversation for Model providers that refuse empty turns.
+        if (!reply.trim()) throw new Error("The model's reply was empty.");
         const message = await addMessage(deps.db, conversationId, "assistant", reply, deps.now());
         await send("done", { message });
       } catch (error) {

@@ -53,6 +53,7 @@ export function createAnthropicAdapter({ apiKey, baseURL }: { apiKey: string; ba
         throw new ModelError("Anthropic's reply failed.", { cause: error });
       }
       if (stopReason === "refusal") throw new ModelError("The model declined to answer.");
+      if (stopReason === null) throw new ModelError("Anthropic's reply was cut off.");
       yield { type: "done", usage };
     },
   };

@@ -45,7 +45,8 @@ export function createOpenAIAdapter({ apiKey, baseURL }: { apiKey: string; baseU
                 usage: {
                   inputTokens: usage.input_tokens - cached,
                   cacheReadTokens: cached,
-                  cacheWriteTokens: 0,
+                  cacheWriteTokens:
+                    (usage.input_tokens_details as { cache_write_tokens?: number } | undefined)?.cache_write_tokens ?? 0,
                   outputTokens: usage.output_tokens,
                   reportedCostMicros: typeof ticks === "number" ? Math.ceil(ticks / 10_000) : null,
                 },

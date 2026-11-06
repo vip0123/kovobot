@@ -10,7 +10,7 @@ export interface ReceivedRequest {
 
 /**
  * A local stand-in for one Model provider's API: a real HTTP server on
- * 127.0.0.1 that the provider's official SDK talks to. It streams the reply
+ * 127.0.0.1 that the Model provider's official SDK talks to. It streams the reply
  * it was told to give, and records every request.
  */
 abstract class FakeModelServer {

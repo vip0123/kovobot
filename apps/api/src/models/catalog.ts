@@ -19,7 +19,7 @@ export const MODELS: readonly ModelInfo[] = [
   { id: "grok-4.7", name: "Grok 4.7", provider: "xai" },
 ];
 
-// "openrouter:<vendor>/<model>", as OpenRouter lists it, and "local:<model>", as the local server names it.
+// "openrouter:<organisation>/<model>", as OpenRouter lists it, and "local:<model>", as the local server names it.
 const OPENROUTER_ID = /^openrouter:[a-z0-9][\w.-]*\/[\w.:-]+$/i;
 const LOCAL_ID = /^local:[\w.:/-]{1,100}$/;
 

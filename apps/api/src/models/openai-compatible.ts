@@ -13,6 +13,7 @@ export function createOpenAICompatibleAdapter({ apiKey, baseURL }: { apiKey: str
   return {
     async *stream({ model, instructions, conversation }) {
       let usage: ModelUsage | null = null;
+      let finished = false;
       try {
         const body = {
           model: model.replace(/^(openrouter|local):/, ""),
@@ -26,21 +27,24 @@ export function createOpenAICompatibleAdapter({ apiKey, baseURL }: { apiKey: str
         for await (const chunk of chunks) {
           const text = chunk.choices[0]?.delta?.content;
           if (text) yield { type: "text", text };
+          if (chunk.choices[0]?.finish_reason) finished = true;
           if (chunk.usage) {
             const cached = chunk.usage.prompt_tokens_details?.cached_tokens ?? 0;
             const cost = (chunk.usage as { cost?: unknown }).cost;
             usage = {
               inputTokens: chunk.usage.prompt_tokens - cached,
               cacheReadTokens: cached,
-              cacheWriteTokens: 0,
+              cacheWriteTokens:
+                (chunk.usage.prompt_tokens_details as { cache_write_tokens?: number } | undefined)?.cache_write_tokens ?? 0,
               outputTokens: chunk.usage.completion_tokens,
-              reportedCostMicros: typeof cost === "number" ? Math.ceil(cost * 1_000_000) : null,
+              reportedCostMicros: typeof cost === "number" ? Math.ceil(Number((cost * 1_000_000).toFixed(3))) : null,
             };
           }
         }
       } catch (error) {
         throw new ModelError("The model server's reply failed.", { cause: error });
       }
+      if (!finished) throw new ModelError("The model server's reply was cut off.");
       yield { type: "done", usage };
     },
   };
