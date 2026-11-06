@@ -30,6 +30,19 @@ if [[ -f .env ]]; then
   done < .env
 fi
 
+# gcloud from PATH or, failing that, the Cloud SDK's per-user install on Windows,
+# run straight from its bundled Python with -S, which that Python needs.
+if ! command -v gcloud >/dev/null 2>&1; then
+  CLOUD_SDK="${LOCALAPPDATA:-}/Google/Cloud SDK/google-cloud-sdk"
+  if [[ -f "$CLOUD_SDK/lib/gcloud.py" && -f "$CLOUD_SDK/platform/bundledpython/python.exe" ]]; then
+    export CLOUDSDK_PYTHON="$CLOUD_SDK/platform/bundledpython/python.exe"
+    gcloud() { "$CLOUDSDK_PYTHON" -S "$CLOUD_SDK/lib/gcloud.py" "$@"; }
+  else
+    echo "The gcloud CLI isn't installed: https://cloud.google.com/sdk/docs/install" >&2
+    exit 1
+  fi
+fi
+
 : "${GOOGLE_CLOUD_PROJECT:?Set GOOGLE_CLOUD_PROJECT (in .env or on the command line) to the Google Cloud project ID}"
 PROJECT="$GOOGLE_CLOUD_PROJECT"
 REGION="${GCP_REGION:-us-central1}"
