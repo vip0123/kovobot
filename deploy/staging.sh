@@ -133,6 +133,9 @@ deploy() {
     env_vars="$env_vars,GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID"
     secrets="$secrets,GOOGLE_OAUTH_CLIENT_SECRET=GOOGLE_OAUTH_CLIENT_SECRET:latest"
   fi
+  # The SMTP password follows .env, so fixing it there and deploying is enough.
+  sync_secret SMTP_PASSWORD
+
   # Each Model provider key set in .env goes to Secret Manager (a new version only
   # when it changed) and to the service; Bots can use that Model provider's models.
   local key
