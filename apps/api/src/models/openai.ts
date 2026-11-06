@@ -34,21 +34,26 @@ export function createOpenAIAdapter({ apiKey, baseURL }: { apiKey: string; baseU
             case "response.completed": {
               const usage = event.response.usage;
               if (!usage) {
-                yield { type: "done", usage: null };
+                yield { type: "done", usage: [] };
                 return;
               }
               const cached = usage.input_tokens_details?.cached_tokens ?? 0;
+              const written =
+                (usage.input_tokens_details as { cache_write_tokens?: number } | undefined)?.cache_write_tokens ?? 0;
               // xAI reports its cost in ticks: 10^10 per US dollar, so 10^4 per micro-dollar.
               const ticks = (usage as { cost_in_usd_ticks?: unknown }).cost_in_usd_ticks;
               yield {
                 type: "done",
-                usage: {
-                  inputTokens: usage.input_tokens - cached,
-                  cacheReadTokens: cached,
-                  cacheWriteTokens: 0,
-                  outputTokens: usage.output_tokens,
-                  reportedCostMicros: typeof ticks === "number" ? Math.ceil(ticks / 10_000) : null,
-                },
+                usage: [
+                  {
+                    model,
+                    inputTokens: Math.max(0, usage.input_tokens - cached - written),
+                    cacheReadTokens: cached,
+                    cacheWriteTokens: written,
+                    outputTokens: usage.output_tokens,
+                    reportedCostMicros: typeof ticks === "number" ? Math.ceil(ticks / 10_000) : null,
+                  },
+                ],
               };
               return;
             }

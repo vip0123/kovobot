@@ -52,7 +52,7 @@ export function ModelPicker({
         <input
           aria-label={route === OPENROUTER ? "OpenRouter model" : "Local model"}
           required
-          placeholder={route === OPENROUTER ? "vendor/model, as OpenRouter lists it" : "the model's name on the local server"}
+          placeholder={route === OPENROUTER ? "the model's name on OpenRouter, e.g. mistralai/mistral-large" : "the model's name on the local server"}
           value={value.slice(route.length)}
           onChange={(event) => onChange(route + event.target.value.trim())}
         />

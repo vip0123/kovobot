@@ -24,8 +24,14 @@ export interface Message {
 
 const MAX_NAME_LENGTH = 80;
 const MAX_MESSAGE_LENGTH = 20_000;
-/** How many of a conversation's latest messages the model sees. */
+/** The most of a conversation's latest messages the model sees. */
 const MESSAGES_SENT_TO_MODEL = 50;
+/**
+ * The model's window onto a long conversation moves on in steps of this many
+ * messages, not one per message. Between steps the start of what it sees stays
+ * the same, so Model providers read it back from their prompt cache.
+ */
+const WINDOW_STEP = 20;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Bots, and chatting with them on the web Channel. Every route needs a signed-in Customer. */
@@ -127,6 +133,8 @@ export function botRoutes(deps: AppDeps) {
           reply += event.text;
           await send("delta", { text: event.text });
         }
+        // An empty reply would break the conversation for Model providers that refuse empty turns.
+        if (!reply.trim()) throw new Error("The model's reply was empty.");
         const message = await addMessage(deps.db, conversationId, "assistant", reply, deps.now());
         await send("done", { message });
       } catch (error) {
@@ -232,14 +240,22 @@ async function listMessages(db: Db, conversationId: string): Promise<Message[]> 
   return rows;
 }
 
-/** The latest messages, oldest first: what the model sees, so a long conversation never outgrows it. */
+/**
+ * What the model sees of the conversation, oldest first: no more than the
+ * latest MESSAGES_SENT_TO_MODEL, so a long conversation never outgrows it,
+ * starting at a WINDOW_STEP and on the Customer's message, as Model providers expect.
+ */
 async function recentMessages(db: Db, conversationId: string): Promise<Message[]> {
-  const { rows } = await db.query<Message>(
-    `SELECT * FROM (
-       SELECT ${MESSAGE_COLUMNS}, id AS seq FROM messages WHERE conversation_id = $1 ORDER BY id DESC LIMIT $2
-     ) recent ORDER BY seq`,
-    [conversationId, MESSAGES_SENT_TO_MODEL],
+  const { rows: counted } = await db.query<{ count: number }>(
+    "SELECT count(*)::int AS count FROM messages WHERE conversation_id = $1",
+    [conversationId],
   );
+  const start = Math.ceil(Math.max(0, counted[0]!.count - MESSAGES_SENT_TO_MODEL) / WINDOW_STEP) * WINDOW_STEP;
+  const { rows } = await db.query<Message>(
+    `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id = $1 ORDER BY id OFFSET $2 LIMIT $3`,
+    [conversationId, start, MESSAGES_SENT_TO_MODEL],
+  );
+  while (rows[0]?.role === "assistant") rows.shift();
   return rows;
 }
 

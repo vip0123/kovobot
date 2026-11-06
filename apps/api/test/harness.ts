@@ -7,22 +7,29 @@ import type { Email } from "../src/mailer.ts";
 import type { ModelAdapter, ModelAdapters } from "../src/models/adapter.ts";
 import { createAnthropicAdapter } from "../src/models/anthropic.ts";
 import { createOpenAIAdapter } from "../src/models/openai.ts";
+import { createOpenAICompatibleAdapter } from "../src/models/openai-compatible.ts";
 import { FakeGoogle, type FakeGoogleAccount } from "./fake-google.ts";
-import { FakeAnthropic } from "./fake-models.ts";
+import { FakeAnthropic, FakeChatCompletions } from "./fake-models.ts";
 import { FAKE_OPENAI_KEY, FakeOpenAI } from "./fake-openai.ts";
 
 /**
  * The API wired to the real, migrated test database. Only the edges are fake:
- * email lands in `outbox`, Google is `google`, OpenAI is `openai` (a local
- * server the real SDK talks to), and the clock is set by hand.
+ * email lands in `outbox`, Google is `google`, and the clock is set by hand.
+ * Model providers are local servers the real SDKs talk to: OpenAI is `openai`,
+ * Anthropic `anthropic`, and `chatCompletions` serves OpenRouter and a local
+ * model server, each only when its option is on.
  */
-export function startTestServer(env: Env = {}, options: { openai?: boolean } = {}) {
+export function startTestServer(
+  env: Env = {},
+  options: { openai?: boolean; openrouter?: boolean; local?: boolean } = {},
+) {
   const db = createDb(inject("databaseUrl"));
   afterAll(() => db.end());
   const openai = new FakeOpenAI();
   const anthropic = new FakeAnthropic();
-  beforeAll(() => Promise.all([openai.start(), anthropic.start()]));
-  afterAll(() => Promise.all([openai.stop(), anthropic.stop()]));
+  const chatCompletions = new FakeChatCompletions();
+  beforeAll(() => Promise.all([openai.start(), anthropic.start(), chatCompletions.start("/v1")]));
+  afterAll(() => Promise.all([openai.stop(), anthropic.stop(), chatCompletions.stop()]));
   // A fake's address is known only once it listens, so each adapter is made on first use.
   const lazy = (make: () => ModelAdapter): ModelAdapter => {
     let adapter: ModelAdapter | undefined;
@@ -36,8 +43,12 @@ export function startTestServer(env: Env = {}, options: { openai?: boolean } = {
     anthropic: lazy(() => createAnthropicAdapter({ apiKey: "sk-ant-test", baseURL: anthropic.baseUrl })),
     google: null,
     xai: null,
-    openrouter: null,
-    local: null,
+    openrouter: options.openrouter
+      ? lazy(() => createOpenAICompatibleAdapter({ apiKey: "sk-or-test", baseURL: chatCompletions.baseUrl }))
+      : null,
+    local: options.local
+      ? lazy(() => createOpenAICompatibleAdapter({ apiKey: "local", baseURL: chatCompletions.baseUrl }))
+      : null,
   };
 
   const { config } = loadConfig({
@@ -76,6 +87,7 @@ export function startTestServer(env: Env = {}, options: { openai?: boolean } = {
     google,
     openai,
     anthropic,
+    chatCompletions,
     /** A fresh browser: its own cookies, and the web app's Origin on every request. */
     browser: () => new Browser(app, config.appUrl),
     lastEmailTo,

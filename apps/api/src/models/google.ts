@@ -8,8 +8,9 @@ export function createGoogleAdapter({ apiKey, baseURL }: { apiKey: string; baseU
 
   return {
     async *stream({ model, instructions, conversation }) {
-      let usage: ModelUsage | null = null;
+      let usage: ModelUsage[] = [];
       let blocked: string | null = null;
+      let finished = false;
       try {
         const chunks = await client.models.generateContentStream({
           model,
@@ -20,7 +21,9 @@ export function createGoogleAdapter({ apiKey, baseURL }: { apiKey: string; baseU
           config: { systemInstruction: instructions },
         });
         for await (const chunk of chunks) {
+          if (chunk.promptFeedback?.blockReason) blocked = chunk.promptFeedback.blockReason;
           const candidate = chunk.candidates?.[0];
+          if (candidate?.finishReason) finished = true;
           for (const part of candidate?.content?.parts ?? []) {
             if (part.text && !part.thought) yield { type: "text", text: part.text };
           }
@@ -30,19 +33,23 @@ export function createGoogleAdapter({ apiKey, baseURL }: { apiKey: string; baseU
           const meta = chunk.usageMetadata;
           if (meta) {
             const cached = meta.cachedContentTokenCount ?? 0;
-            usage = {
-              inputTokens: (meta.promptTokenCount ?? 0) - cached,
-              cacheReadTokens: cached,
-              cacheWriteTokens: 0,
-              outputTokens: (meta.candidatesTokenCount ?? 0) + (meta.thoughtsTokenCount ?? 0),
-              reportedCostMicros: null,
-            };
+            usage = [
+              {
+                model,
+                inputTokens: (meta.promptTokenCount ?? 0) - cached,
+                cacheReadTokens: cached,
+                cacheWriteTokens: 0,
+                outputTokens: (meta.candidatesTokenCount ?? 0) + (meta.thoughtsTokenCount ?? 0),
+                reportedCostMicros: null,
+              },
+            ];
           }
         }
       } catch (error) {
         throw new ModelError("Gemini's reply failed.", { cause: error });
       }
-      if (blocked) throw new ModelError(`Gemini stopped the reply (${blocked}).`);
+      if (blocked) throw new ModelError(`Gemini stopped the reply (${blocked}).`, { usage });
+      if (!finished) throw new ModelError("Gemini's reply was cut off.");
       yield { type: "done", usage };
     },
   };

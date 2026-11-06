@@ -19,12 +19,17 @@ export interface ModelRequest {
 }
 
 /**
- * Usage in one shape for every Model provider, which metering prices from the
- * Price table (ticket 07). Thinking tokens count as output, as every Model
- * provider bills them.
+ * One billed attempt's usage, in one shape for every Model provider, which
+ * metering prices from the Price table (ticket 07). Thinking tokens count as
+ * output, as every Model provider bills them.
  */
 export interface ModelUsage {
-  /** Input read at the full rate: not from cache. */
+  /**
+   * The model these tokens were used on, priced at its own rates: the one asked
+   * for, or the one a server-side fallback answered with when it declined.
+   */
+  model: string;
+  /** Input at the full rate: neither read from nor written to the cache. */
   inputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
@@ -38,8 +43,12 @@ export interface ModelUsage {
 
 export type ModelEvent =
   | { type: "text"; text: string }
-  /** Usage is null when the Model provider didn't report it; such a call has no cost evidence. */
-  | { type: "done"; usage: ModelUsage | null };
+  /**
+   * One entry per billed attempt: more than one when a server-side fallback
+   * ran. Empty when the Model provider reported none; such a call has no cost
+   * evidence.
+   */
+  | { type: "done"; usage: ModelUsage[] };
 
 export interface ModelAdapter {
   /** One call to the Model provider: a single HTTP attempt, streamed. Throws ModelError if it fails. */
@@ -52,4 +61,11 @@ export type ModelAdapters = Record<ModelProvider, ModelAdapter | null>;
 /** A model call that failed, was refused, or ended without finishing its reply. */
 export class ModelError extends Error {
   override name = "ModelError";
+  /** What the attempts billed before it failed used, where the Model provider reported it: a refusal is billed too. */
+  readonly usage: ModelUsage[];
+
+  constructor(message: string, options: { cause?: unknown; usage?: ModelUsage[] } = {}) {
+    super(message, { cause: options.cause });
+    this.usage = options.usage ?? [];
+  }
 }

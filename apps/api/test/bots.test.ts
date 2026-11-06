@@ -193,20 +193,26 @@ describe("keeping a conversation sound", () => {
     expect((await history(browser, bot)).map((message) => message.content)).not.toContain("Second?");
   });
 
-  test("only the latest 50 messages go to the model, so a long conversation keeps working", async () => {
+  test("a long conversation's window moves on in steps, so the model keeps reading its start from cache", async () => {
     const browser = await signedInBrowser();
     const bot = await createBot(browser);
-
-    for (let i = 1; i <= 26; i++) {
+    // The first reply fails, so from here on the Customer's and the Bot's messages fall at odd and even places.
+    server.openai.failWith(500);
+    await chat(browser, bot, "Question 1");
+    for (let i = 2; i <= 28; i++) {
       server.openai.replyWith(`Answer ${i}`);
       await chat(browser, bot, `Question ${i}`);
     }
 
-    const input = server.openai.requests.at(-1)!.input;
-    expect(input).toHaveLength(50);
-    expect(input[0]).toEqual({ role: "assistant", content: "Answer 1" });
-    expect(input.at(-1)).toEqual({ role: "user", content: "Question 26" });
-  });
+    // 52 messages when Question 27 went out: the window starts at the 21st, a Bot message, so on the
+    // Customer's next one. Question 28 still sees the same start, and the same messages after it.
+    const [atQuestion27, atQuestion28] = server.openai.requests.slice(-2).map((request) => request.input);
+    expect(atQuestion27).toHaveLength(31);
+    expect(atQuestion27![0]).toEqual({ role: "user", content: "Question 12" });
+    expect(atQuestion27!.at(-1)).toEqual({ role: "user", content: "Question 27" });
+    expect(atQuestion28).toHaveLength(33);
+    expect(atQuestion28!.slice(0, atQuestion27!.length)).toEqual(atQuestion27);
+  }, 30_000);
 });
 
 describe("Model providers", () => {
@@ -248,17 +254,72 @@ describe("Model providers", () => {
     expect(body).toMatchObject({ openrouter: false, local: false });
   });
 
-  test("any OpenRouter model can be picked by the name OpenRouter lists it under", async () => {
+  test("OpenRouter and local models are refused where neither is set up", async () => {
     const browser = await signedInBrowser();
 
-    expect((await browser.post("/api/bots", { name: "Scout", model: "openrouter:mistralai/mistral-large" })).status).toBe(201);
-    expect((await browser.post("/api/bots", { name: "Scout", model: "openrouter:not a model" })).status).toBe(400);
+    expect((await browser.post("/api/bots", { name: "Scout", model: "openrouter:mistralai/mistral-large" })).status).toBe(400);
+    expect((await browser.post("/api/bots", { name: "Scout", model: "local:llama4" })).status).toBe(400);
+  });
+});
+
+describe("with OpenRouter and a local model server set up", () => {
+  const openRouterAndLocal = startTestServer({}, { openrouter: true, local: true });
+
+  async function openRouterAndLocalBrowser(): Promise<Browser> {
+    const browser = openRouterAndLocal.browser();
+    await openRouterAndLocal.signInByEmail(browser, uniqueEmail());
+    return browser;
+  }
+
+  test("the model list offers any OpenRouter model and the local server's models", async () => {
+    const browser = await openRouterAndLocalBrowser();
+
+    expect(await (await browser.get("/api/models")).json()).toMatchObject({ openrouter: true, local: true });
   });
 
-  test("local models are offered only where a local model server is set up", async () => {
-    const browser = await signedInBrowser();
+  test("a Bot chats on any OpenRouter model, picked by the name OpenRouter lists it under", async () => {
+    const browser = await openRouterAndLocalBrowser();
+    expect((await browser.post("/api/bots", { name: "Scout", model: "openrouter:not a model" })).status).toBe(400);
+    const created = await browser.post("/api/bots", { name: "Scout", model: "openrouter:mistralai/mistral-large" });
+    expect(created.status).toBe(201);
+    const { bot } = (await created.json()) as { bot: Bot };
+    openRouterAndLocal.chatCompletions.replyWith("Routed ", "hello.");
 
-    expect((await browser.post("/api/bots", { name: "Scout", model: "local:llama4" })).status).toBe(400);
+    const response = await browser.post(`/api/bots/${bot.id}/messages`, { content: "Hi" });
+    const events = await serverSentEvents(response);
+
+    expect(events.at(-1)).toMatchObject({ event: "done", data: { message: { content: "Routed hello." } } });
+    expect(openRouterAndLocal.chatCompletions.requests.at(-1)!.body.model).toBe("mistralai/mistral-large");
+  });
+
+  test("a self-hosted Bot chats on a model from the local model server", async () => {
+    const browser = await openRouterAndLocalBrowser();
+    const created = await browser.post("/api/bots", { name: "Scout", model: "local:llama4" });
+    expect(created.status).toBe(201);
+    const { bot } = (await created.json()) as { bot: Bot };
+    openRouterAndLocal.chatCompletions.replyWith("Local ", "hello.");
+
+    const response = await browser.post(`/api/bots/${bot.id}/messages`, { content: "Hi" });
+    const events = await serverSentEvents(response);
+
+    expect(events.at(-1)).toMatchObject({ event: "done", data: { message: { content: "Local hello." } } });
+    expect(openRouterAndLocal.chatCompletions.requests.at(-1)!.body).toMatchObject({
+      model: "llama4",
+      messages: [{ role: "system" }, { role: "user", content: "Hi" }],
+    });
+  });
+
+  test("a cut-off reply is reported as a failure, and nothing empty is saved", async () => {
+    const browser = await openRouterAndLocalBrowser();
+    const { bot } = (await (await browser.post("/api/bots", { name: "Scout", model: "local:llama4" })).json()) as { bot: Bot };
+    openRouterAndLocal.chatCompletions.replyWith("");
+    openRouterAndLocal.chatCompletions.endNextReply({ kind: "cut-off" });
+
+    const events = await serverSentEvents(await browser.post(`/api/bots/${bot.id}/messages`, { content: "Hi" }));
+
+    expect(events.at(-1)).toMatchObject({ event: "error", data: { code: "model_failed" } });
+    const { messages } = (await (await browser.get(`/api/bots/${bot.id}/messages`)).json()) as { messages: unknown[] };
+    expect(messages).toEqual([expect.objectContaining({ role: "user", content: "Hi" })]);
   });
 });
 

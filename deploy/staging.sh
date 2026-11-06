@@ -102,6 +102,7 @@ setup() {
 # Stores a secret from the environment unless Secret Manager already holds that value.
 sync_secret() {
   local name="$1" current
+  [[ -n "${!name:-}" ]] || return 0
   current="$(gcloud secrets versions access latest --secret "$name" --project "$PROJECT" 2>/dev/null || true)"
   [[ "$current" == "${!name}" ]] || store_secret "$name"
 }
@@ -140,9 +141,9 @@ deploy() {
   # when it changed) and to the service; Bots can use that Model provider's models.
   local key
   for key in OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY XAI_API_KEY OPENROUTER_API_KEY; do
-    [[ -n "${!key:-}" ]] || continue
+    # Set in .env: stored first. Already in Secret Manager: used as it is.
     sync_secret "$key"
-    secrets="$secrets,$key=$key:latest"
+    gcloud secrets describe "$key" --project "$PROJECT" >/dev/null 2>&1 && secrets="$secrets,$key=$key:latest"
   done
 
   gcloud builds submit --tag "$image" --project "$PROJECT" .
