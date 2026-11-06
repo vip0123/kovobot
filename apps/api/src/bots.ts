@@ -6,7 +6,8 @@ import type { AppDeps } from "./app.ts";
 import { sessionCustomer } from "./auth/sessions.ts";
 import type { Customer } from "./customers.ts";
 import { apiError, jsonBody } from "./http.ts";
-import { findModel, MODELS } from "./models/catalog.ts";
+import type { ModelAdapters } from "./models/adapter.ts";
+import { describeModel, MODELS, type ModelInfo } from "./models/catalog.ts";
 
 export interface Bot {
   id: string;
@@ -62,8 +63,8 @@ export function botRoutes(deps: AppDeps) {
     const body = await jsonBody(c);
     const name = botName(body.name);
     if (!name) return invalidName(c);
-    const model = findModel(body.model, deps.models);
-    if (!model) return apiError(c, 400, "unknown_model", "Pick one of the listed models.");
+    const model = chooseModel(body.model, deps.models);
+    if ("refused" in model) return apiError(c, 400, model.refused, model.message);
     const bot = await createBot(deps.db, c.get("customer").id, { name, model: model.id }, deps.now());
     return c.json({ bot }, 201);
   });
@@ -73,10 +74,8 @@ export function botRoutes(deps: AppDeps) {
     const body = await jsonBody(c);
     const name = body.name === undefined ? undefined : botName(body.name);
     if (name === null) return invalidName(c);
-    const model = body.model === undefined ? undefined : findModel(body.model, deps.models);
-    if (model === undefined && body.model !== undefined) {
-      return apiError(c, 400, "unknown_model", "Pick one of the listed models.");
-    }
+    const model = body.model === undefined ? undefined : chooseModel(body.model, deps.models);
+    if (model && "refused" in model) return apiError(c, 400, model.refused, model.message);
     if (name === undefined && model === undefined) return invalidName(c);
     const bot = await updateBot(deps.db, c.get("customer").id, c.req.param("id"), { name, model: model?.id });
     return bot ? c.json({ bot }) : botNotFound(c);
@@ -102,7 +101,8 @@ export function botRoutes(deps: AppDeps) {
     if (!text || text.length > MAX_MESSAGE_LENGTH) {
       return apiError(c, 400, "invalid_message", `Write a message of up to ${MAX_MESSAGE_LENGTH.toLocaleString("en-US")} characters.`);
     }
-    const model = findModel(bot.model, deps.models);
+    // The Bot's model may since have gone: its Model provider's key removed.
+    const model = describeModel(bot.model);
     const adapter = model ? deps.models[model.provider] : null;
     if (!model || !adapter) {
       return apiError(c, 503, "model_unavailable", `${model?.name ?? bot.model} isn't available here right now.`);
@@ -153,6 +153,14 @@ export function botRoutes(deps: AppDeps) {
 
 function botNotFound(c: Parameters<typeof apiError>[0]) {
   return apiError(c, 404, "bot_not_found", "There's no such Bot.");
+}
+
+/** The model a Bot is being set to, or why it can't be: unknown, or its Model provider isn't set up here. */
+function chooseModel(id: unknown, models: ModelAdapters): ModelInfo | { refused: string; message: string } {
+  const model = describeModel(id);
+  if (!model) return { refused: "unknown_model", message: "Pick one of the listed models." };
+  if (!models[model.provider]) return { refused: "model_unavailable", message: `${model.name} isn't set up here. Pick another model.` };
+  return model;
 }
 
 function invalidName(c: Parameters<typeof apiError>[0]) {

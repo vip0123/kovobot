@@ -1,7 +1,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { api, type Bot, errorMessage, type ModelCatalog } from "../api.ts";
-import { firstAvailableModel, ModelPicker } from "../ModelPicker.tsx";
+import { canUse, firstAvailableModel, ModelPicker } from "../ModelPicker.tsx";
 import { AppShell } from "../AppShell.tsx";
 
 export function BotsPage() {
@@ -117,7 +117,7 @@ function NewBotForm({ catalog, first, onCancel }: { catalog: ModelCatalog; first
           </p>
         )}
         <div className="actions">
-          <button type="submit" className="button primary" disabled={saving || !chosenModel || chosenModel.endsWith(":")}>
+          <button type="submit" className="button primary" disabled={saving || !canUse(catalog, chosenModel)}>
             {saving ? "Creating…" : "Create Bot"}
           </button>
           {!first && (

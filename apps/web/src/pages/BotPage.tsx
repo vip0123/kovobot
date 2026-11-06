@@ -1,7 +1,7 @@
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api, type Bot, errorMessage, type Message, type ModelCatalog } from "../api.ts";
-import { ModelPicker } from "../ModelPicker.tsx";
+import { canUse, ModelPicker } from "../ModelPicker.tsx";
 import { AppShell } from "../AppShell.tsx";
 
 export function BotPage() {
@@ -145,7 +145,7 @@ function BotHeader({ bot, catalog, onChange }: { bot: Bot; catalog: ModelCatalog
             Model
           </label>
           <ModelPicker id="switch-model" catalog={catalog} value={model} onChange={setModel} />
-          <button type="submit" className="button primary small" disabled={model.endsWith(":")}>
+          <button type="submit" className="button primary small" disabled={!canUse(catalog, model) || model === bot.model}>
             Switch
           </button>
           <button type="button" className="button secondary small" onClick={() => setSwitching(false)}>

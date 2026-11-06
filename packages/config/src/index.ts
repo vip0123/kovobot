@@ -42,6 +42,8 @@ export interface Config {
   modelKeys: ModelKeys;
   /** A local OpenAI-compatible model server (Ollama, vLLM). Self-hosted only; always null when hosted. */
   localModelsUrl: string | null;
+  /** The Anthropic workspace to call in, for an Anthropic key that isn't scoped to one. Null for one that is. */
+  anthropicWorkspaceId: string | null;
 }
 
 export interface ModelKeys {
@@ -229,6 +231,7 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
       openrouter: read("OPENROUTER_API_KEY") ?? null,
     },
     localModelsUrl: null,
+    anthropicWorkspaceId: read("ANTHROPIC_WORKSPACE_ID") ?? null,
   };
   const localModelsUrl = read("OPENAI_COMPATIBLE_BASE_URL");
   if (localModelsUrl && hosted) {
