@@ -35,22 +35,20 @@ Coming next: Own keys, Credit and metering, Telegram, Discord and Slack, MCP too
 
 ## Self-host in five minutes
 
-You need Node 24, pnpm 10 (`corepack enable`) and Docker.
+You need Git and Docker. Your Model provider keys go in a `.env` file on your own machine; Kovobot reads them when it starts.
 
 ```sh
 git clone https://github.com/vip0123/kovobot.git
 cd kovobot
-pnpm install
-pnpm db:up          # Postgres on localhost:54329
-pnpm db:migrate
 cp .env.example .env
-# Put at least one Model provider key in .env, e.g. ANTHROPIC_API_KEY=…
-pnpm dev            # web app on http://localhost:5173, API on :3000
+# Open .env and paste at least one Model provider key, e.g.
+#   ANTHROPIC_API_KEY=sk-ant-...   or   OPENROUTER_API_KEY=sk-or-...
+docker compose up -d
 ```
 
-Open http://localhost:5173, enter your email, and copy the sign-in link from the API's log (without SMTP settings, links go to the log). Create a Bot, pick a model, and say hello.
+Open http://localhost:8080 and enter your email. Without email settings, the sign-in link goes to the log: `docker compose logs kovobot`. Create a Bot, pick a model, and say hello.
 
-Self-hosted installs never charge: billing and Plan limits stay off. To use a local model server (Ollama, vLLM), set `OPENAI_COMPATIBLE_BASE_URL`, e.g. `http://localhost:11434/v1`.
+Self-hosted installs never charge: billing and Plan limits stay off. **[SELF-HOSTING.md](SELF-HOSTING.md)** covers each key, local models (Ollama), emailed sign-in links, and running it on a server for other people. To work on the code itself, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Configuration
 
@@ -62,6 +60,8 @@ Every setting is in [`.env.example`](.env.example), with a comment on what it do
 | `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM` | Email sign-in links instead of logging them |
 | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` | Sign in with Google |
 | `SESSION_SECRET` | Keeps people signed in across restarts |
+| `KOVOBOT_URL` | The address people open Kovobot at, when it runs on a server |
+| `SIGN_UP_OPEN` | `false` lets in only the people you add, so strangers can't spend on your keys |
 
 ## How it's built
 

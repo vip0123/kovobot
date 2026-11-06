@@ -1,6 +1,36 @@
-# Local Postgres for development and tests: pnpm db:up
-# Port 54329 avoids clashing with any other Postgres on 5432.
+# Self-hosted Kovobot in one command: docker compose up -d, then open http://localhost:8080.
+# Settings and Model provider keys come from .env (copy .env.example); SELF-HOSTING.md walks through them.
+# Development and tests use only the database: pnpm db:up.
 services:
+  kovobot:
+    build: .
+    # Migrations first, then the server; both read the same settings.
+    command: ["sh", "-c", "node apps/api/src/migrate.ts && exec node apps/api/src/main.ts"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Always self-hosted here: billing, Plan limits and analytics stay off.
+      KOVOBOT_MODE: self-hosted
+      NODE_ENV: production
+      PORT: "8080"
+      WEB_DIST_DIR: /app/apps/web/dist
+      DATABASE_URL: postgres://kovobot:kovobot@postgres:5432/kovobot
+      # The address people open Kovobot at. The API serves the web app there, so both are one origin.
+      API_URL: ${KOVOBOT_URL:-http://localhost:8080}
+      APP_URL: ${KOVOBOT_URL:-http://localhost:8080}
+    ports:
+      # Only this machine can reach it; on a server, an https reverse proxy goes in front.
+      - "127.0.0.1:8080:8080"
+    extra_hosts:
+      # Lets OPENAI_COMPATIBLE_BASE_URL reach a model server on this machine, e.g. Ollama.
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Port 54329 avoids clashing with any other Postgres on 5432.
   postgres:
     image: postgres:17-alpine
     environment:
@@ -16,6 +46,7 @@ services:
       interval: 2s
       timeout: 3s
       retries: 15
+    restart: unless-stopped
 
 volumes:
   kovobot-postgres:

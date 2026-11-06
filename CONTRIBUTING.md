@@ -9,8 +9,11 @@ You need Node 24, pnpm 10 (`corepack enable`) and Docker.
 ```sh
 pnpm install
 pnpm db:up && pnpm db:migrate
-pnpm dev
+cp .env.example .env   # then add at least one Model provider key
+pnpm dev               # web app on http://localhost:5173, API on :3000
 ```
+
+Without SMTP settings, sign-in links go to the API's log. `docker compose up -d` runs the built image instead, as an Operator would ([SELF-HOSTING.md](SELF-HOSTING.md)).
 
 ## Before you open a pull request
 
