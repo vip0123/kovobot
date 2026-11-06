@@ -13,7 +13,8 @@ COPY packages/config/package.json packages/config/
 COPY packages/db/package.json packages/db/
 RUN pnpm install --frozen-lockfile
 COPY . .
-RUN pnpm build
+# Only the web app goes in the image; the landing page ships to GitHub Pages.
+RUN pnpm --filter @kovobot/web build
 
 FROM base AS runtime
 ENV NODE_ENV=production
