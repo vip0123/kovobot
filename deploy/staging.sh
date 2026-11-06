@@ -14,7 +14,8 @@
 #                                          stores SMTP_PASSWORD in Secret Manager
 #   GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET
 #                                          optional: turn on Sign in with Google
-#   OPENAI_API_KEY                         our OpenAI key, so Bots can reply; setup stores it
+#   OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, XAI_API_KEY, OPENROUTER_API_KEY
+#                                          our Model provider keys; deploy stores each one set
 #   LANDING_URL                            optional: the landing page that posts leads,
 #                                          e.g. https://kovobot.com
 set -euo pipefail
@@ -95,8 +96,14 @@ setup() {
   openssl rand -base64 32 | tr -d '\n' | gcloud secrets create SESSION_SECRET --data-file - --project "$PROJECT"
   store_secret SMTP_PASSWORD
   [[ -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]] && store_secret GOOGLE_OAUTH_CLIENT_SECRET
-  [[ -n "${OPENAI_API_KEY:-}" ]] && store_secret OPENAI_API_KEY
   echo "Set up. Next: deploy/staging.sh deploy"
+}
+
+# Stores a secret from the environment unless Secret Manager already holds that value.
+sync_secret() {
+  local name="$1" current
+  current="$(gcloud secrets versions access latest --secret "$name" --project "$PROJECT" 2>/dev/null || true)"
+  [[ "$current" == "${!name}" ]] || store_secret "$name"
 }
 
 # Copies a secret from the environment (.env) into Secret Manager, or adds a new version of it.
@@ -126,10 +133,14 @@ deploy() {
     env_vars="$env_vars,GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID"
     secrets="$secrets,GOOGLE_OAUTH_CLIENT_SECRET=GOOGLE_OAUTH_CLIENT_SECRET:latest"
   fi
-  # Without our OpenAI key, Bots on staging answer that their model isn't available.
-  if gcloud secrets describe OPENAI_API_KEY --project "$PROJECT" >/dev/null 2>&1; then
-    secrets="$secrets,OPENAI_API_KEY=OPENAI_API_KEY:latest"
-  fi
+  # Each Model provider key set in .env goes to Secret Manager (a new version only
+  # when it changed) and to the service; Bots can use that Model provider's models.
+  local key
+  for key in OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY XAI_API_KEY OPENROUTER_API_KEY; do
+    [[ -n "${!key:-}" ]] || continue
+    sync_secret "$key"
+    secrets="$secrets,$key=$key:latest"
+  done
 
   gcloud builds submit --tag "$image" --project "$PROJECT" .
 

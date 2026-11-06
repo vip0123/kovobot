@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { api, type Bot, errorMessage, type ModelInfo } from "../api.ts";
+import { api, type Bot, errorMessage, type ModelCatalog } from "../api.ts";
+import { firstAvailableModel, ModelPicker } from "../ModelPicker.tsx";
 import { AppShell } from "../AppShell.tsx";
 
 export function BotsPage() {
@@ -9,21 +10,21 @@ export function BotsPage() {
 
 function BotList() {
   const [bots, setBots] = useState<Bot[] | null>(null);
-  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [catalog, setCatalog] = useState<ModelCatalog>({ models: [], openrouter: false, local: false });
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([api.bots(), api.models()]).then(
-      ([{ bots }, { models }]) => {
+      ([{ bots }, catalog]) => {
         setBots(bots);
-        setModels(models);
+        setCatalog(catalog);
       },
       (caught: unknown) => setError(errorMessage(caught)),
     );
   }, []);
 
-  const modelName = (id: string) => models.find((model) => model.id === id)?.name ?? id;
+  const modelName = (id: string) => catalog.models.find((model) => model.id === id)?.name ?? id.replace(/^(openrouter|local):/, "");
 
   return (
     <main className="page">
@@ -42,7 +43,7 @@ function BotList() {
       )}
       {bots === null && !error && <p className="muted">Loading…</p>}
       {bots !== null && (bots.length === 0 || creating) && (
-        <NewBotForm models={models} first={bots.length === 0} onCancel={() => setCreating(false)} />
+        <NewBotForm catalog={catalog} first={bots.length === 0} onCancel={() => setCreating(false)} />
       )}
       {bots !== null && bots.length > 0 && (
         <ul className="bot-list">
@@ -60,14 +61,13 @@ function BotList() {
   );
 }
 
-function NewBotForm({ models, first, onCancel }: { models: ModelInfo[]; first: boolean; onCancel: () => void }) {
+function NewBotForm({ catalog, first, onCancel }: { catalog: ModelCatalog; first: boolean; onCancel: () => void }) {
   const navigate = useNavigate();
-  const available = models.filter((model) => model.available);
   const [name, setName] = useState("");
   const [model, setModel] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const chosenModel = model || available[0]?.id || "";
+  const chosenModel = model || firstAvailableModel(catalog);
 
   async function create(event: FormEvent) {
     event.preventDefault();
@@ -104,27 +104,20 @@ function NewBotForm({ models, first, onCancel }: { models: ModelInfo[]; first: b
         </div>
         <div className="field">
           <label htmlFor="bot-model">Model</label>
-          <select id="bot-model" value={chosenModel} onChange={(event) => setModel(event.target.value)}>
-            {models.map((option) => (
-              <option key={option.id} value={option.id} disabled={!option.available}>
-                {option.name}
-                {option.available ? "" : " (not set up here)"}
-              </option>
-            ))}
-          </select>
+          <ModelPicker id="bot-model" catalog={catalog} value={chosenModel} onChange={setModel} />
         </div>
         {error && (
           <p className="alert" role="alert">
             {error}
           </p>
         )}
-        {available.length === 0 && models.length > 0 && (
+        {!firstAvailableModel(catalog) && catalog.models.length > 0 && (
           <p className="alert" role="alert">
             No Model provider key is set up here yet, so Bots can't reply.
           </p>
         )}
         <div className="actions">
-          <button type="submit" className="button primary" disabled={saving || !chosenModel}>
+          <button type="submit" className="button primary" disabled={saving || !chosenModel || chosenModel.endsWith(":")}>
             {saving ? "Creating…" : "Create Bot"}
           </button>
           {!first && (

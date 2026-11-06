@@ -3,7 +3,7 @@ import { createDb } from "@kovobot/db";
 import { createApp } from "./app.ts";
 import { configOrExit } from "./config-or-exit.ts";
 import { createMailer } from "./mailer.ts";
-import { createOpenAIAdapter } from "./models/openai.ts";
+import { createModelAdapters } from "./models/adapters.ts";
 
 const { config, warnings } = configOrExit();
 for (const warning of warnings) console.warn(`Warning: ${warning}`);
@@ -14,7 +14,7 @@ const app = createApp({
   db,
   mailer: createMailer(config.email),
   fetch: globalThis.fetch,
-  models: { openai: config.openaiApiKey ? createOpenAIAdapter({ apiKey: config.openaiApiKey }) : null },
+  models: createModelAdapters(config),
   now: () => new Date(),
 });
 

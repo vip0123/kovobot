@@ -5,8 +5,10 @@ import { createDb } from "@kovobot/db";
 import { type AppDeps, createApp } from "../src/app.ts";
 import type { Email } from "../src/mailer.ts";
 import type { ModelAdapter, ModelAdapters } from "../src/models/adapter.ts";
+import { createAnthropicAdapter } from "../src/models/anthropic.ts";
 import { createOpenAIAdapter } from "../src/models/openai.ts";
 import { FakeGoogle, type FakeGoogleAccount } from "./fake-google.ts";
+import { FakeAnthropic } from "./fake-models.ts";
 import { FAKE_OPENAI_KEY, FakeOpenAI } from "./fake-openai.ts";
 
 /**
@@ -18,20 +20,24 @@ export function startTestServer(env: Env = {}, options: { openai?: boolean } = {
   const db = createDb(inject("databaseUrl"));
   afterAll(() => db.end());
   const openai = new FakeOpenAI();
-  beforeAll(() => openai.start());
-  afterAll(() => openai.stop());
-  // The fake's address is known only once it listens, so the adapter is made on first use.
-  let openaiAdapter: ModelAdapter | undefined;
+  const anthropic = new FakeAnthropic();
+  beforeAll(() => Promise.all([openai.start(), anthropic.start()]));
+  afterAll(() => Promise.all([openai.stop(), anthropic.stop()]));
+  // A fake's address is known only once it listens, so each adapter is made on first use.
+  const lazy = (make: () => ModelAdapter): ModelAdapter => {
+    let adapter: ModelAdapter | undefined;
+    return { stream: (request) => (adapter ??= make()).stream(request) };
+  };
   const models: ModelAdapters = {
     openai:
       options.openai === false
         ? null
-        : {
-            stream: (request) =>
-              (openaiAdapter ??= createOpenAIAdapter({ apiKey: FAKE_OPENAI_KEY, baseURL: openai.baseUrl })).stream(
-                request,
-              ),
-          },
+        : lazy(() => createOpenAIAdapter({ apiKey: FAKE_OPENAI_KEY, baseURL: openai.baseUrl })),
+    anthropic: lazy(() => createAnthropicAdapter({ apiKey: "sk-ant-test", baseURL: anthropic.baseUrl })),
+    google: null,
+    xai: null,
+    openrouter: null,
+    local: null,
   };
 
   const { config } = loadConfig({
@@ -69,6 +75,7 @@ export function startTestServer(env: Env = {}, options: { openai?: boolean } = {
     clock,
     google,
     openai,
+    anthropic,
     /** A fresh browser: its own cookies, and the web app's Origin on every request. */
     browser: () => new Browser(app, config.appUrl),
     lastEmailTo,

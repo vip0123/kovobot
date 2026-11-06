@@ -209,6 +209,59 @@ describe("keeping a conversation sound", () => {
   });
 });
 
+describe("Model providers", () => {
+  test("switching a Bot to another Model provider's model keeps its conversation", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    server.openai.replyWith("Noted.");
+    await chat(browser, bot, "Remember the blue folder.");
+
+    const switched = await browser.send(`/api/bots/${bot.id}`, {
+      method: "PATCH",
+      headers: { origin: server.config.appUrl, "content-type": "application/json" },
+      body: JSON.stringify({ model: "claude-sonnet-5-5" }),
+    });
+    expect(switched.status).toBe(200);
+    expect(await switched.json()).toMatchObject({ bot: { name: "Scout", model: "claude-sonnet-5-5" } });
+    server.anthropic.replyWith("The blue one.");
+    const events = await chat(browser, bot, "Which folder?");
+
+    expect(events.at(-1)).toMatchObject({ event: "done", data: { message: { content: "The blue one." } } });
+    expect(server.anthropic.requests.at(-1)!.body.messages).toEqual([
+      { role: "user", content: "Remember the blue folder." },
+      { role: "assistant", content: "Noted." },
+      { role: "user", content: "Which folder?" },
+    ]);
+  });
+
+  test("the model list shows which Model providers are set up here", async () => {
+    const browser = await signedInBrowser();
+    const body = (await (await browser.get("/api/models")).json()) as {
+      models: Array<{ id: string; available: boolean }>;
+      openrouter: boolean;
+      local: boolean;
+    };
+    const available = (id: string) => body.models.find((model) => model.id === id)?.available;
+
+    expect(available("claude-opus-5-5")).toBe(true);
+    expect(available("gemini-4-argon")).toBe(false);
+    expect(body).toMatchObject({ openrouter: false, local: false });
+  });
+
+  test("any OpenRouter model can be picked by the name OpenRouter lists it under", async () => {
+    const browser = await signedInBrowser();
+
+    expect((await browser.post("/api/bots", { name: "Scout", model: "openrouter:mistralai/mistral-large" })).status).toBe(201);
+    expect((await browser.post("/api/bots", { name: "Scout", model: "openrouter:not a model" })).status).toBe(400);
+  });
+
+  test("local models are offered only where a local model server is set up", async () => {
+    const browser = await signedInBrowser();
+
+    expect((await browser.post("/api/bots", { name: "Scout", model: "local:llama4" })).status).toBe(400);
+  });
+});
+
 describe("without an OpenAI key", () => {
   const keyless = startTestServer({}, { openai: false });
 

@@ -42,7 +42,12 @@ export function botRoutes(deps: AppDeps) {
   }
 
   routes.get("/models", (c) =>
-    c.json({ models: MODELS.map((model) => ({ ...model, available: deps.models[model.provider] !== null })) }),
+    c.json({
+      models: MODELS.map((model) => ({ ...model, available: deps.models[model.provider] !== null })),
+      // Any OpenRouter model, by its OpenRouter name; and, self-hosted, models on a local server.
+      openrouter: deps.models.openrouter !== null,
+      local: deps.models.local !== null,
+    }),
   );
 
   routes.get("/bots", async (c) => c.json({ bots: await listBots(deps.db, c.get("customer").id) }));
@@ -51,16 +56,23 @@ export function botRoutes(deps: AppDeps) {
     const body = await jsonBody(c);
     const name = botName(body.name);
     if (!name) return invalidName(c);
-    const model = findModel(body.model);
+    const model = findModel(body.model, deps.models);
     if (!model) return apiError(c, 400, "unknown_model", "Pick one of the listed models.");
     const bot = await createBot(deps.db, c.get("customer").id, { name, model: model.id }, deps.now());
     return c.json({ bot }, 201);
   });
 
+  // Renames a Bot, or switches its model; its conversation stays as it is.
   routes.patch("/bots/:id", async (c) => {
-    const name = botName((await jsonBody(c)).name);
-    if (!name) return invalidName(c);
-    const bot = await renameBot(deps.db, c.get("customer").id, c.req.param("id"), name);
+    const body = await jsonBody(c);
+    const name = body.name === undefined ? undefined : botName(body.name);
+    if (name === null) return invalidName(c);
+    const model = body.model === undefined ? undefined : findModel(body.model, deps.models);
+    if (model === undefined && body.model !== undefined) {
+      return apiError(c, 400, "unknown_model", "Pick one of the listed models.");
+    }
+    if (name === undefined && model === undefined) return invalidName(c);
+    const bot = await updateBot(deps.db, c.get("customer").id, c.req.param("id"), { name, model: model?.id });
     return bot ? c.json({ bot }) : botNotFound(c);
   });
 
@@ -84,7 +96,7 @@ export function botRoutes(deps: AppDeps) {
     if (!text || text.length > MAX_MESSAGE_LENGTH) {
       return apiError(c, 400, "invalid_message", `Write a message of up to ${MAX_MESSAGE_LENGTH.toLocaleString("en-US")} characters.`);
     }
-    const model = findModel(bot.model);
+    const model = findModel(bot.model, deps.models);
     const adapter = model ? deps.models[model.provider] : null;
     if (!model || !adapter) {
       return apiError(c, 503, "model_unavailable", `${model?.name ?? bot.model} isn't available here right now.`);
@@ -172,11 +184,17 @@ async function findBot(db: Db, customerId: string, botId: string): Promise<Bot |
   return rows[0] ?? null;
 }
 
-async function renameBot(db: Db, customerId: string, botId: string, name: string): Promise<Bot | null> {
+async function updateBot(
+  db: Db,
+  customerId: string,
+  botId: string,
+  change: { name: string | undefined; model: string | undefined },
+): Promise<Bot | null> {
   if (!UUID_PATTERN.test(botId)) return null;
   const { rows } = await db.query<Bot>(
-    `UPDATE bots SET name = $3 WHERE id = $1 AND customer_id = $2 RETURNING ${BOT_COLUMNS}`,
-    [botId, customerId, name],
+    `UPDATE bots SET name = COALESCE($3, name), model = COALESCE($4, model)
+     WHERE id = $1 AND customer_id = $2 RETURNING ${BOT_COLUMNS}`,
+    [botId, customerId, change.name ?? null, change.model ?? null],
   );
   return rows[0] ?? null;
 }

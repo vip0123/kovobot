@@ -20,6 +20,13 @@ export interface ModelInfo {
   available: boolean;
 }
 
+/** The models a Bot can use here: listed ones, plus any OpenRouter or local model where those are set up. */
+export interface ModelCatalog {
+  models: ModelInfo[];
+  openrouter: boolean;
+  local: boolean;
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant";
@@ -81,10 +88,11 @@ export const api = {
   me: () => request<{ customer: Customer }>("/me"),
   signOut: () => request<unknown>("/auth/sign-out", { method: "POST" }),
 
-  models: () => request<{ models: ModelInfo[] }>("/models"),
+  models: () => request<ModelCatalog>("/models"),
   bots: () => request<{ bots: Bot[] }>("/bots"),
   createBot: (name: string, model: string) => request<{ bot: Bot }>("/bots", { method: "POST", json: { name, model } }),
   renameBot: (id: string, name: string) => request<{ bot: Bot }>(`/bots/${id}`, { method: "PATCH", json: { name } }),
+  switchModel: (id: string, model: string) => request<{ bot: Bot }>(`/bots/${id}`, { method: "PATCH", json: { model } }),
   deleteBot: (id: string) => request<unknown>(`/bots/${id}`, { method: "DELETE" }),
   messages: (botId: string) => request<{ messages: Message[] }>(`/bots/${botId}/messages`),
 

@@ -88,7 +88,7 @@ describe("self-hosted defaults", () => {
     expect(warnings).toEqual([
       expect.stringMatching(/^SESSION_SECRET is not set/),
       expect.stringMatching(/^SMTP_HOST is not set/),
-      expect.stringMatching(/^OPENAI_API_KEY is not set/),
+      expect.stringMatching(/^No Model provider key is set/),
     ]);
   });
 
@@ -158,10 +158,33 @@ describe("sign-up and the landing page", () => {
 });
 
 describe("Model provider keys", () => {
-  test("OPENAI_API_KEY lets Bots use OpenAI models; without it they can't reply, and the server says so", () => {
-    expect(loadConfig({ OPENAI_API_KEY: "sk-test" }).config.openaiApiKey).toBe("sk-test");
-    const { config, warnings } = loadConfig({});
-    expect(config.openaiApiKey).toBeNull();
-    expect(warnings).toContainEqual(expect.stringMatching(/^OPENAI_API_KEY is not set/));
+  test("each Model provider's key switches it on; with none set, Bots can't reply and the server says so", () => {
+    const { config } = loadConfig({
+      OPENAI_API_KEY: "sk-openai",
+      ANTHROPIC_API_KEY: "sk-ant",
+      GEMINI_API_KEY: "gemini-key",
+      XAI_API_KEY: "xai-key",
+      OPENROUTER_API_KEY: "sk-or",
+    });
+    expect(config.modelKeys).toEqual({
+      openai: "sk-openai",
+      anthropic: "sk-ant",
+      google: "gemini-key",
+      xai: "xai-key",
+      openrouter: "sk-or",
+    });
+
+    const empty = loadConfig({});
+    expect(empty.config.modelKeys).toEqual({ openai: null, anthropic: null, google: null, xai: null, openrouter: null });
+    expect(empty.warnings).toContainEqual(expect.stringMatching(/^No Model provider key is set/));
+  });
+
+  test("a local model server is for self-hosted installs only: the hosted service never calls a URL it is given", () => {
+    expect(loadConfig({ OPENAI_COMPATIBLE_BASE_URL: "http://localhost:11434/v1" }).config.localModelsUrl).toBe(
+      "http://localhost:11434/v1",
+    );
+    expect(configProblems({ ...hostedEnv, OPENAI_COMPATIBLE_BASE_URL: "http://localhost:11434/v1" })).toEqual([
+      expect.stringMatching(/^OPENAI_COMPATIBLE_BASE_URL is for self-hosted installs only/),
+    ]);
   });
 });

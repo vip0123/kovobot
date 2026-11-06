@@ -1,6 +1,7 @@
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { api, type Bot, errorMessage, type Message, type ModelInfo } from "../api.ts";
+import { api, type Bot, errorMessage, type Message, type ModelCatalog } from "../api.ts";
+import { ModelPicker } from "../ModelPicker.tsx";
 import { AppShell } from "../AppShell.tsx";
 
 export function BotPage() {
@@ -11,15 +12,15 @@ export function BotPage() {
 function BotChat() {
   const { id = "" } = useParams();
   const [bot, setBot] = useState<Bot | null | undefined>(undefined);
-  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [catalog, setCatalog] = useState<ModelCatalog>({ models: [], openrouter: false, local: false });
   const [messages, setMessages] = useState<Message[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([api.bots(), api.models(), api.messages(id)]).then(
-      ([{ bots }, { models }, { messages }]) => {
+      ([{ bots }, catalog, { messages }]) => {
         setBot(bots.find((candidate) => candidate.id === id) ?? null);
-        setModels(models);
+        setCatalog(catalog);
         setMessages(messages);
       },
       (caught: unknown) => {
@@ -43,13 +44,16 @@ function BotChat() {
 
   return (
     <main className="page chat-page">
-      <BotHeader bot={bot} modelName={models.find((model) => model.id === bot.model)?.name ?? bot.model} onRename={setBot} />
+      <BotHeader bot={bot} catalog={catalog} onChange={setBot} />
       <Conversation bot={bot} messages={messages} onMessages={setMessages} />
     </main>
   );
 }
 
-function BotHeader({ bot, modelName, onRename }: { bot: Bot; modelName: string; onRename: (bot: Bot) => void }) {
+function BotHeader({ bot, catalog, onChange }: { bot: Bot; catalog: ModelCatalog; onChange: (bot: Bot) => void }) {
+  const modelName = catalog.models.find((model) => model.id === bot.model)?.name ?? bot.model.replace(/^(openrouter|local):/, "");
+  const [switching, setSwitching] = useState(false);
+  const [model, setModel] = useState(bot.model);
   const navigate = useNavigate();
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(bot.name);
@@ -60,8 +64,20 @@ function BotHeader({ bot, modelName, onRename }: { bot: Bot; modelName: string; 
     event.preventDefault();
     try {
       const { bot: renamed } = await api.renameBot(bot.id, name);
-      onRename(renamed);
+      onChange(renamed);
       setRenaming(false);
+      setError(null);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  async function switchModel(event: FormEvent) {
+    event.preventDefault();
+    try {
+      const { bot: switched } = await api.switchModel(bot.id, model);
+      onChange(switched);
+      setSwitching(false);
       setError(null);
     } catch (caught) {
       setError(errorMessage(caught));
@@ -103,6 +119,9 @@ function BotHeader({ bot, modelName, onRename }: { bot: Bot; modelName: string; 
             <button type="button" className="button secondary small" onClick={() => setRenaming(true)}>
               Rename
             </button>
+            <button type="button" className="button secondary small" onClick={() => setSwitching(true)}>
+              Change model
+            </button>
             {confirmingDelete ? (
               <>
                 <button type="button" className="button danger small" onClick={remove}>
@@ -119,6 +138,21 @@ function BotHeader({ bot, modelName, onRename }: { bot: Bot; modelName: string; 
             )}
           </div>
         </div>
+      )}
+      {switching && (
+        <form className="rename" onSubmit={switchModel}>
+          <label htmlFor="switch-model" className="visually-hidden">
+            Model
+          </label>
+          <ModelPicker id="switch-model" catalog={catalog} value={model} onChange={setModel} />
+          <button type="submit" className="button primary small" disabled={model.endsWith(":")}>
+            Switch
+          </button>
+          <button type="button" className="button secondary small" onClick={() => setSwitching(false)}>
+            Cancel
+          </button>
+          <span className="muted small">The conversation stays as it is.</span>
+        </form>
       )}
       {error && (
         <p className="alert" role="alert">

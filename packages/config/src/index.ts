@@ -38,8 +38,18 @@ export interface Config {
   signUpOpen: boolean;
   /** Origin of the landing page, allowed to post leads to the API. Null when there is none. */
   landingUrl: string | null;
-  /** Our OpenAI key (the Operator's, when self-hosted). Null leaves OpenAI models unavailable. */
-  openaiApiKey: string | null;
+  /** Our key for each Model provider (the Operator's, when self-hosted). Null leaves its models unavailable. */
+  modelKeys: ModelKeys;
+  /** A local OpenAI-compatible model server (Ollama, vLLM). Self-hosted only; always null when hosted. */
+  localModelsUrl: string | null;
+}
+
+export interface ModelKeys {
+  openai: string | null;
+  anthropic: string | null;
+  google: string | null;
+  xai: string | null;
+  openrouter: string | null;
 }
 
 /** Every problem found in the environment, so they can all be fixed in one go. */
@@ -211,10 +221,27 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
     webDistDir,
     signUpOpen: booleanSetting("SIGN_UP_OPEN", !hosted),
     landingUrl: optionalOrigin("LANDING_URL"),
-    openaiApiKey: read("OPENAI_API_KEY") ?? null,
+    modelKeys: {
+      openai: read("OPENAI_API_KEY") ?? null,
+      anthropic: read("ANTHROPIC_API_KEY") ?? null,
+      google: read("GEMINI_API_KEY") ?? null,
+      xai: read("XAI_API_KEY") ?? null,
+      openrouter: read("OPENROUTER_API_KEY") ?? null,
+    },
+    localModelsUrl: null,
   };
-  if (!config.openaiApiKey) {
-    warnings.push("OPENAI_API_KEY is not set: Bots can't reply until a Model provider key is added.");
+  const localModelsUrl = read("OPENAI_COMPATIBLE_BASE_URL");
+  if (localModelsUrl && hosted) {
+    problems.push(
+      "OPENAI_COMPATIBLE_BASE_URL is for self-hosted installs only: the hosted service never calls a URL it is given.",
+    );
+  } else if (localModelsUrl) {
+    config.localModelsUrl = localModelsUrl.replace(/\/$/, "");
+  }
+  if (Object.values(config.modelKeys).every((key) => key === null) && !config.localModelsUrl) {
+    warnings.push(
+      "No Model provider key is set (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, XAI_API_KEY or OPENROUTER_API_KEY): Bots can't reply.",
+    );
   }
 
   if (problems.length > 0) throw new ConfigError(problems);

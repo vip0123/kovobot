@@ -21,6 +21,8 @@ export interface ResponsesRequest {
 export class FakeOpenAI {
   readonly requests: ResponsesRequest[] = [];
   baseUrl = "";
+  /** xAI reports each call's cost in ticks (10^10 per US dollar); null reports none, as OpenAI does. */
+  costTicks: number | null = null;
   private next:
     | { kind: "reply"; deltas: string[] }
     | { kind: "break"; deltas: string[] }
@@ -124,6 +126,7 @@ export class FakeOpenAI {
           output_tokens: 5,
           output_tokens_details: { reasoning_tokens: 0 },
           total_tokens: 17,
+          ...(this.costTicks === null ? {} : { cost_in_usd_ticks: this.costTicks }),
         },
       },
     });
