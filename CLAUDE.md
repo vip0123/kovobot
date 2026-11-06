@@ -20,6 +20,7 @@ pnpm test apps/api/test/sign-in.test.ts   # one file
 pnpm test -t "works only once"            # tests whose name matches
 pnpm typecheck && pnpm lint && pnpm build
 docker build -t kovobot .  # the deployable image; deploy/staging.sh puts it on Cloud Run
+docker compose up -d       # self-hosted: that image and Postgres on http://localhost:8080 (SELF-HOSTING.md)
 ```
 
 With no `.env` the server starts self-hosted and writes sign-in links to its log.
