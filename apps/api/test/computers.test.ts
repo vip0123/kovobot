@@ -166,6 +166,25 @@ describe("watching a Computer live", () => {
     socket.close();
   });
 
+  test("closes when the Customer signs out, or the Computer goes", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    await browser.post(`/api/bots/${bot.id}/computer`);
+
+    const signedOut = await watch(await liveViewLink(browser, bot), browser);
+    const closed = new Promise((resolve) => signedOut.socket.once("close", resolve));
+    await browser.post("/api/auth/sign-out");
+    await closed;
+
+    const other = await signedInBrowser();
+    const otherBot = await createBot(other);
+    await other.post(`/api/bots/${otherBot.id}/computer`);
+    const deleted = await watch(await liveViewLink(other, otherBot), other);
+    const deletedClosed = new Promise((resolve) => deleted.socket.once("close", resolve));
+    await deleteRequest(other, `/api/bots/${otherBot.id}/computer`);
+    await deletedClosed;
+  });
+
   test("a Computer that is shut down can't be watched", async () => {
     const browser = await signedInBrowser();
     const bot = await createBot(browser);

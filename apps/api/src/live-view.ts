@@ -14,9 +14,12 @@ interface App {
  * Takes the browser's WebSocket for a Computer's live view (GET /api/bots/:id/computer/live)
  * and relays it to the Computer service. The app's own route decides first, with the same
  * session and ownership checks as every other route, so the Customer's cookie stays
- * first-party and the Computer service never faces a browser.
+ * first-party and the Computer service never faces a browser. While the view is open the
+ * route is asked again every `recheckMs`: once the Customer signs out, or the Bot or its
+ * Computer goes, the view closes.
  */
-export function liveViewUpgrade(app: App, deps: AppDeps) {
+export function liveViewUpgrade(app: App, deps: AppDeps, options: { recheckMs?: number } = {}) {
+  const recheckMs = options.recheckMs ?? 30_000;
   const webSockets = new WebSocketServer({ noServer: true });
 
   async function upgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
@@ -27,9 +30,14 @@ export function liveViewUpgrade(app: App, deps: AppDeps) {
     for (const [name, value] of Object.entries(request.headers)) {
       if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(", ") : value);
     }
-    const decision = await app.fetch(new Request(new URL(path, deps.config.apiUrl), { headers }));
+    const decide = () => app.fetch(new Request(new URL(path, deps.config.apiUrl), { headers }));
+    const decision = await decide();
     if (decision.status !== 200) return refuse(socket, decision.status, await decision.text());
     const { computerId, token } = (await decision.json()) as { computerId: string; token: string };
+    const stillAllowed = async () => {
+      const again = await decide();
+      return again.status === 200 && ((await again.json()) as { computerId: string }).computerId === computerId;
+    };
 
     let computer;
     try {
@@ -50,8 +58,17 @@ export function liveViewUpgrade(app: App, deps: AppDeps) {
     webSockets.handleUpgrade(request, socket, head, (browser) => {
       computer.onMessage((data, isBinary) => browser.send(data, { binary: isBinary }));
       browser.on("message", (data, isBinary) => computer.send(data, isBinary));
+      const recheck = setInterval(() => {
+        stillAllowed().then(
+          (allowed) => allowed || browser.close(1008, "The live view ended."),
+          () => browser.close(1011, "The live view ended."),
+        );
+      }, recheckMs);
       computer.onClose(() => browser.close());
-      browser.on("close", () => computer.close());
+      browser.on("close", () => {
+        clearInterval(recheck);
+        computer.close();
+      });
       browser.on("error", () => computer.close());
     });
   }
