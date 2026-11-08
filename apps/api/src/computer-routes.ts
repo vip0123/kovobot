@@ -13,6 +13,8 @@ interface BotComputer {
   computerId: string | null;
   /** How long the Computer may sit with nothing going on before it goes Asleep. */
   sleepAfterMinutes: number;
+  /** Whether the Customer has the mouse and keyboard; the Bot waits meanwhile. */
+  customerInControl: boolean;
 }
 
 /** The Customer picks how long a Computer may sit idle: 15 minutes to 4 hours. */
@@ -124,6 +126,15 @@ export function computerRoutes(deps: AppDeps) {
     return c.body(null, 204);
   }));
 
+  // The Customer takes the mouse and keyboard, or hands them back; a Bot at work waits meanwhile.
+  routes.post("/control", forComputer(async (c, computer, _computers, bot) => {
+    const inControl = (await jsonBody(c)).inControl;
+    if (typeof inControl !== "boolean") return apiError(c, 400, "invalid_control", "Say whether you take control: true or false.");
+    await deps.db.query("UPDATE bots SET computer_controlled_at = $2 WHERE id = $1", [bot.botId, inControl ? deps.now() : null]);
+    await touch(bot);
+    return c.json({ computer: view(computer, { ...bot, customerInControl: inControl }) });
+  }));
+
   // A link to watch the Computer live, good for a minute; the browser opens it as a WebSocket.
   routes.post("/live-view", forComputer(async (c, computer, computers, bot) => {
     const { token, expiresAt } = await computers.liveViewToken(computer.id);
@@ -177,7 +188,18 @@ export function computerSizes(deps: AppDeps) {
 
 /** What the browser sees of a Computer. */
 function view(computer: ComputerView, bot: BotComputer) {
-  return { state: computer.state, size: computer.size, sleepAfterMinutes: bot.sleepAfterMinutes };
+  return {
+    state: computer.state,
+    size: computer.size,
+    sleepAfterMinutes: bot.sleepAfterMinutes,
+    customerInControl: bot.customerInControl,
+  };
+}
+
+/** The Customer's live view closed: the Bot may use its Computer again. */
+export async function handBack(deps: AppDeps, botId: string): Promise<void> {
+  if (!UUID_PATTERN.test(botId)) return;
+  await deps.db.query("UPDATE bots SET computer_controlled_at = NULL WHERE id = $1", [botId]);
 }
 
 function sizeOf(raw: unknown): ComputerSize | null {
@@ -191,7 +213,8 @@ function invalidSize(c: Context) {
 async function botComputer(db: Db, customerId: string, botId: string): Promise<BotComputer | null> {
   if (!UUID_PATTERN.test(botId)) return null;
   const { rows } = await db.query<BotComputer>(
-    `SELECT id AS "botId", name AS "botName", computer_id AS "computerId", computer_sleep_after_minutes AS "sleepAfterMinutes"
+    `SELECT id AS "botId", name AS "botName", computer_id AS "computerId", computer_sleep_after_minutes AS "sleepAfterMinutes",
+       computer_controlled_at IS NOT NULL AS "customerInControl"
      FROM bots WHERE id = $1 AND customer_id = $2`,
     [botId, customerId],
   );

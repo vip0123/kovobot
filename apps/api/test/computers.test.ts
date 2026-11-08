@@ -40,15 +40,15 @@ describe("a Bot's Computer", () => {
 
     const created = await browser.post(`/api/bots/${bot.id}/computer`);
     expect(created.status).toBe(201);
-    expect(await created.json()).toEqual({ computer: { state: "running", size: "small", sleepAfterMinutes: 15 } });
+    expect(await created.json()).toEqual({ computer: { state: "running", size: "small", sleepAfterMinutes: 15, customerInControl: false } });
     expect([...server.computerService.computers.values()]).toContainEqual(expect.objectContaining({ owner: bot.id }));
 
     expect(await (await browser.post(`/api/bots/${bot.id}/computer/shut-down`)).json()).toEqual({
-      computer: { state: "shut_down", size: "small", sleepAfterMinutes: 15 },
+      computer: { state: "shut_down", size: "small", sleepAfterMinutes: 15, customerInControl: false },
     });
-    expect(await computerOf(browser, bot)).toEqual({ state: "shut_down", size: "small", sleepAfterMinutes: 15 });
+    expect(await computerOf(browser, bot)).toEqual({ state: "shut_down", size: "small", sleepAfterMinutes: 15, customerInControl: false });
     expect(await (await browser.post(`/api/bots/${bot.id}/computer/start`)).json()).toEqual({
-      computer: { state: "running", size: "small", sleepAfterMinutes: 15 },
+      computer: { state: "running", size: "small", sleepAfterMinutes: 15, customerInControl: false },
     });
 
     expect((await deleteRequest(browser, `/api/bots/${bot.id}/computer`)).status).toBe(204);
@@ -62,15 +62,15 @@ describe("a Bot's Computer", () => {
     const sizes = await browser.get("/api/computer-sizes");
     expect(((await sizes.json()) as { sizes: Array<{ size: string }> }).sizes.map((size) => size.size)).toEqual(["small", "medium"]);
 
-    const created = await browser.post(`/api/bots/${bot.id}/computer`, { size: "medium", sleepAfterMinutes: 15 });
-    expect(await created.json()).toEqual({ computer: { state: "running", size: "medium", sleepAfterMinutes: 15 } });
+    const created = await browser.post(`/api/bots/${bot.id}/computer`, { size: "medium", sleepAfterMinutes: 15, customerInControl: false });
+    expect(await created.json()).toEqual({ computer: { state: "running", size: "medium", sleepAfterMinutes: 15, customerInControl: false } });
 
     const resized = await browser.send(`/api/bots/${bot.id}/computer`, {
       method: "PATCH",
       headers: { origin: server.config.appUrl, "content-type": "application/json" },
-      body: JSON.stringify({ size: "small", sleepAfterMinutes: 15 }),
+      body: JSON.stringify({ size: "small", sleepAfterMinutes: 15, customerInControl: false }),
     });
-    expect(await resized.json()).toEqual({ computer: { state: "running", size: "small", sleepAfterMinutes: 15 } });
+    expect(await resized.json()).toEqual({ computer: { state: "running", size: "small", sleepAfterMinutes: 15, customerInControl: false } });
   });
 
   test("a size that doesn't exist, or that this machine can't give, is refused", async () => {
@@ -109,7 +109,7 @@ describe("a Bot's Computer", () => {
       expect(response.status).toBe(404);
       expect(await response.json()).toMatchObject({ error: { code: "bot_not_found" } });
     }
-    expect(await computerOf(owner, bot)).toEqual({ state: "running", size: "small", sleepAfterMinutes: 15 });
+    expect(await computerOf(owner, bot)).toEqual({ state: "running", size: "small", sleepAfterMinutes: 15, customerInControl: false });
   });
 
   test("is deleted with its Bot", async () => {
@@ -145,7 +145,7 @@ describe("a Bot's Computer", () => {
     } finally {
       server.computerService.misrouted = false;
     }
-    expect(await computerOf(browser, bot)).toEqual({ state: "running", size: "small", sleepAfterMinutes: 15 });
+    expect(await computerOf(browser, bot)).toEqual({ state: "running", size: "small", sleepAfterMinutes: 15, customerInControl: false });
   });
 
   test("is unavailable where no Computer service is set up", async () => {

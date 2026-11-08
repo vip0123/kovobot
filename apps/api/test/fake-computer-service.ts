@@ -18,6 +18,8 @@ const SIZES_HERE = [
   { size: "medium", name: "Medium", vcpus: 2, memoryGb: 8 },
 ];
 const ALL_SIZES = ["small", "medium", "large", "xl"];
+/** A 1x1 PNG: every screenshot the fake takes. */
+export const SCREENSHOT_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==";
 
 /**
  * A local stand-in for the Computer service: a real HTTP server on 127.0.0.1 that the
@@ -30,6 +32,8 @@ export class FakeComputerService {
   readonly computers = new Map<string, FakeComputer>();
   /** Every live-view token issued, and the Computer each one is for. */
   readonly liveViewTokens = new Map<string, string>();
+  /** Every action carried out, and screenshots taken, in order. */
+  readonly actions: Array<{ computerId: string; action: Record<string, unknown> }> = [];
   private server: Server | undefined;
   private readonly webSockets = new WebSocketServer({ noServer: true });
 
@@ -120,6 +124,18 @@ export class FakeComputerService {
     if (request.method === "POST" && action === "shut-down") {
       computer.state = "shut_down";
       return send(200, { computer });
+    }
+    if (request.method === "POST" && action === "actions") {
+      if (computer.state !== "running") return send(409, { error: { code: "computer_not_running", message: "Start the Computer first." } });
+      this.actions.push({ computerId: computer.id, action: body });
+      return send(200, body.type === "cursor_position" ? { cursor: { x: 1, y: 2 } } : {});
+    }
+    if (request.method === "GET" && action === "screenshot") {
+      if (computer.state !== "running") return send(409, { error: { code: "computer_not_running", message: "Start the Computer first." } });
+      this.actions.push({ computerId: computer.id, action: { type: "screenshot" } });
+      response.writeHead(200, { "content-type": "image/png" });
+      response.end(Buffer.from(SCREENSHOT_PNG, "base64"));
+      return;
     }
     if (request.method === "POST" && action === "live-view") {
       if (computer.state !== "running") {

@@ -2,6 +2,7 @@ import { type IncomingMessage, STATUS_CODES } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
 import type { AppDeps } from "./app.ts";
+import { handBack } from "./computer-routes.ts";
 import { ComputerServiceError } from "./computers.ts";
 
 const LIVE_VIEW_PATH = /^\/api\/bots\/[^/?]+\/computer\/live(?:\?|$)/;
@@ -30,6 +31,7 @@ export function liveViewUpgrade(app: App, deps: AppDeps, options: { recheckMs?: 
     for (const [name, value] of Object.entries(request.headers)) {
       if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(", ") : value);
     }
+    const botId = /^\/api\/bots\/([^/?]+)\//.exec(path)?.[1] ?? "";
     const decide = () => app.fetch(new Request(new URL(path, deps.config.apiUrl), { headers }));
     const decision = await decide();
     if (decision.status !== 200) return refuse(socket, decision.status, await decision.text());
@@ -68,6 +70,8 @@ export function liveViewUpgrade(app: App, deps: AppDeps, options: { recheckMs?: 
       browser.on("close", () => {
         clearInterval(recheck);
         computer.close();
+        // Whoever had control let go when the view closed: the Bot may carry on.
+        void handBack(deps, botId).catch((error: unknown) => console.error(error));
       });
       browser.on("error", () => computer.close());
     });

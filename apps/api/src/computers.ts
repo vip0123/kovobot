@@ -1,6 +1,7 @@
 import WebSocket, { type RawData } from "ws";
 import type { ComputerServiceSettings } from "@kovobot/config";
 import type { ComputerSize, ComputerSizeSpec } from "@kovobot/plans";
+import type { ComputerAction } from "./models/adapter.ts";
 
 export type ComputerState = "running" | "asleep" | "shut_down";
 
@@ -47,6 +48,10 @@ export interface ComputerService {
   shutDown(id: string): Promise<ComputerView>;
   /** Deletes the Computer and its disk; one that's already gone counts as deleted. */
   remove(id: string): Promise<void>;
+  /** Carries out one action from the Computer agent's set; answers with what it reports, such as the cursor. */
+  act(id: string, action: ComputerAction): Promise<Record<string, unknown>>;
+  /** The screen as it is now, as base64 PNG. */
+  screenshot(id: string): Promise<string>;
   /** A short-lived token that opens this Computer's live view. */
   liveViewToken(id: string): Promise<{ token: string; expiresAt: string }>;
   openLiveView(id: string, token: string): Promise<LiveView>;
@@ -93,6 +98,19 @@ export function createComputerServiceClient(settings: ComputerServiceSettings): 
     shutDown: (id) => computer("POST", `/computers/${id}/shut-down`),
     async remove(id) {
       await call("DELETE", `/computers/${id}`);
+    },
+    async act(id, action) {
+      const answer = await call<Record<string, unknown>>("POST", `/computers/${id}/actions`, action);
+      if (!answer) throw NOT_FOUND();
+      return answer;
+    },
+    async screenshot(id) {
+      const response = await fetch(`${settings.url}/v1/computers/${id}/screenshot`, { headers: { authorization } });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { error?: { code?: string; message?: string } };
+        throw new ComputerServiceError(response.status, body.error?.code ?? "unknown", body.error?.message ?? "No screenshot.");
+      }
+      return Buffer.from(await response.arrayBuffer()).toString("base64");
     },
     async liveViewToken(id) {
       const answer = await call<{ token: string; expiresAt: string }>("POST", `/computers/${id}/live-view`);

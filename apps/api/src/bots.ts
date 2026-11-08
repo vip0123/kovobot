@@ -5,6 +5,7 @@ import { runTask } from "./agent.ts";
 import type { AppDeps } from "./app.ts";
 import { sessionCustomer } from "./auth/sessions.ts";
 import { computerRoutes, computerSizes, deleteBotComputer } from "./computer-routes.ts";
+import { driveComputer, drivingFor } from "./driver.ts";
 import type { Customer } from "./customers.ts";
 import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
 import type { ModelAdapters } from "./models/adapter.ts";
@@ -146,7 +147,10 @@ export function botRoutes(deps: AppDeps) {
       };
       let reply = "";
       try {
-        for await (const event of runTask(adapter, { botName: bot.name, model: model.id, conversation })) {
+        const driving = await drivingFor(deps, bot.id);
+        const tools = driving ? { useComputer: (task: string) => driveComputer(deps, driving, task) } : undefined;
+        for await (const event of runTask(adapter, { botName: bot.name, model: model.id, conversation, tools })) {
+          if (event.type === "status") await send("status", { text: event.text });
           if (event.type !== "text") continue;
           reply += event.text;
           await send("delta", { text: event.text });
@@ -270,7 +274,7 @@ const MESSAGE_COLUMNS = `id::text, role, content, created_at AS "createdAt"`;
 
 async function listMessages(db: Db, conversationId: string): Promise<Message[]> {
   const { rows } = await db.query<Message>(
-    `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id = $1 ORDER BY id`,
+    `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id = $1 ORDER BY messages.id`,
     [conversationId],
   );
   return rows;
@@ -288,7 +292,7 @@ async function recentMessages(db: Db, conversationId: string): Promise<Message[]
   );
   const start = Math.ceil(Math.max(0, counted[0]!.count - MESSAGES_SENT_TO_MODEL) / WINDOW_STEP) * WINDOW_STEP;
   const { rows } = await db.query<Message>(
-    `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id = $1 ORDER BY id OFFSET $2 LIMIT $3`,
+    `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id = $1 ORDER BY messages.id OFFSET $2 LIMIT $3`,
     [conversationId, start, MESSAGES_SENT_TO_MODEL],
   );
   while (rows[0]?.role === "assistant") rows.shift();
