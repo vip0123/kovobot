@@ -39,20 +39,48 @@ describe("a Bot's Computer", () => {
 
     const created = await browser.post(`/api/bots/${bot.id}/computer`);
     expect(created.status).toBe(201);
-    expect(await created.json()).toEqual({ computer: { state: "running" } });
+    expect(await created.json()).toEqual({ computer: { state: "running", size: "small" } });
     expect([...server.computerService.computers.values()]).toContainEqual(expect.objectContaining({ owner: bot.id }));
 
     expect(await (await browser.post(`/api/bots/${bot.id}/computer/shut-down`)).json()).toEqual({
-      computer: { state: "shut_down" },
+      computer: { state: "shut_down", size: "small" },
     });
-    expect(await computerOf(browser, bot)).toEqual({ state: "shut_down" });
+    expect(await computerOf(browser, bot)).toEqual({ state: "shut_down", size: "small" });
     expect(await (await browser.post(`/api/bots/${bot.id}/computer/start`)).json()).toEqual({
-      computer: { state: "running" },
+      computer: { state: "running", size: "small" },
     });
 
     expect((await deleteRequest(browser, `/api/bots/${bot.id}/computer`)).status).toBe(204);
     expect(await computerOf(browser, bot)).toBeNull();
     expect([...server.computerService.computers.values()]).not.toContainEqual(expect.objectContaining({ owner: bot.id }));
+  });
+
+  test("is created at the size the Customer picks, among those this machine can give, and can be resized", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    const sizes = await browser.get("/api/computer-sizes");
+    expect(((await sizes.json()) as { sizes: Array<{ size: string }> }).sizes.map((size) => size.size)).toEqual(["small", "medium"]);
+
+    const created = await browser.post(`/api/bots/${bot.id}/computer`, { size: "medium" });
+    expect(await created.json()).toEqual({ computer: { state: "running", size: "medium" } });
+
+    const resized = await browser.send(`/api/bots/${bot.id}/computer`, {
+      method: "PATCH",
+      headers: { origin: server.config.appUrl, "content-type": "application/json" },
+      body: JSON.stringify({ size: "small" }),
+    });
+    expect(await resized.json()).toEqual({ computer: { state: "running", size: "small" } });
+  });
+
+  test("a size that doesn't exist, or that this machine can't give, is refused", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    for (const [size, code] of [["huge", "invalid_size"], ["xl", "size_unavailable"]]) {
+      const response = await browser.post(`/api/bots/${bot.id}/computer`, { size });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code } });
+    }
+    expect(await computerOf(browser, bot)).toBeNull();
   });
 
   test("is one per Bot", async () => {
@@ -80,7 +108,7 @@ describe("a Bot's Computer", () => {
       expect(response.status).toBe(404);
       expect(await response.json()).toMatchObject({ error: { code: "bot_not_found" } });
     }
-    expect(await computerOf(owner, bot)).toEqual({ state: "running" });
+    expect(await computerOf(owner, bot)).toEqual({ state: "running", size: "small" });
   });
 
   test("is deleted with its Bot", async () => {
@@ -116,7 +144,7 @@ describe("a Bot's Computer", () => {
     } finally {
       server.computerService.misrouted = false;
     }
-    expect(await computerOf(browser, bot)).toEqual({ state: "running" });
+    expect(await computerOf(browser, bot)).toEqual({ state: "running", size: "small" });
   });
 
   test("is unavailable where no Computer service is set up", async () => {

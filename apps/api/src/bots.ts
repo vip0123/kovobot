@@ -4,7 +4,7 @@ import type { Db } from "@kovobot/db";
 import { runTask } from "./agent.ts";
 import type { AppDeps } from "./app.ts";
 import { sessionCustomer } from "./auth/sessions.ts";
-import { computerRoutes, deleteBotComputer } from "./computer-routes.ts";
+import { computerRoutes, computerSizes, deleteBotComputer } from "./computer-routes.ts";
 import type { Customer } from "./customers.ts";
 import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
 import type { ModelAdapters } from "./models/adapter.ts";
@@ -39,7 +39,7 @@ const WINDOW_STEP = 20;
 export function botRoutes(deps: AppDeps) {
   const routes = new Hono<{ Variables: { customer: Customer } }>();
 
-  for (const path of ["/models", "/bots", "/bots/*"]) {
+  for (const path of ["/models", "/computer-sizes", "/bots", "/bots/*"]) {
     routes.use(path, async (c, next) => {
       const customer = await sessionCustomer(c, deps);
       if (!customer) return apiError(c, 401, "signed_out", "Sign in to continue.");
@@ -56,6 +56,8 @@ export function botRoutes(deps: AppDeps) {
       local: deps.models.local !== null,
     }),
   );
+
+  routes.get("/computer-sizes", computerSizes(deps));
 
   routes.get("/bots", async (c) => c.json({ bots: await listBots(deps.db, c.get("customer").id) }));
 

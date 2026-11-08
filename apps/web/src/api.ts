@@ -37,6 +37,15 @@ export interface Message {
 /** A Bot's Computer. Shut down keeps its disk; Asleep keeps its memory too. */
 export interface Computer {
   state: "running" | "asleep" | "shut_down";
+  size: string;
+}
+
+/** A Computer size this install can give: its CPUs and memory. */
+export interface ComputerSize {
+  size: string;
+  name: string;
+  vcpus: number;
+  memoryGb: number;
 }
 
 /** An error answer from the API: its machine-readable code and a sentence to show. */
@@ -102,7 +111,11 @@ export const api = {
   messages: (botId: string) => request<{ messages: Message[] }>(`/bots/${botId}/messages`),
 
   computer: (botId: string) => request<{ computer: Computer | null }>(`/bots/${botId}/computer`),
-  createComputer: (botId: string) => request<{ computer: Computer }>(`/bots/${botId}/computer`, { method: "POST" }),
+  computerSizes: () => request<{ sizes: ComputerSize[] }>("/computer-sizes"),
+  createComputer: (botId: string, size: string) =>
+    request<{ computer: Computer }>(`/bots/${botId}/computer`, { method: "POST", json: { size } }),
+  resizeComputer: (botId: string, size: string) =>
+    request<{ computer: Computer }>(`/bots/${botId}/computer`, { method: "PATCH", json: { size } }),
   startComputer: (botId: string) => request<{ computer: Computer }>(`/bots/${botId}/computer/start`, { method: "POST" }),
   shutDownComputer: (botId: string) =>
     request<{ computer: Computer }>(`/bots/${botId}/computer/shut-down`, { method: "POST" }),

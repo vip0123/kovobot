@@ -9,7 +9,15 @@ interface FakeComputer {
   id: string;
   owner: string;
   state: State;
+  size: string;
 }
+
+/** The sizes this stand-in machine can give: Small and Medium; Large and XL don't fit. */
+const SIZES_HERE = [
+  { size: "small", name: "Small", vcpus: 2, memoryGb: 4 },
+  { size: "medium", name: "Medium", vcpus: 2, memoryGb: 8 },
+];
+const ALL_SIZES = ["small", "medium", "large", "xl"];
 
 /**
  * A local stand-in for the Computer service: a real HTTP server on 127.0.0.1 that the
@@ -71,8 +79,18 @@ export class FakeComputerService {
     }
 
     const path = request.url ?? "";
+    const sizeRefusal = (size: unknown) =>
+      !ALL_SIZES.includes(String(size))
+        ? { error: { code: "invalid_size", message: "Pick a size." } }
+        : !SIZES_HERE.some((here) => here.size === size)
+          ? { error: { code: "size_unavailable", message: "This machine can't give a Computer that much." } }
+          : null;
+    if (request.method === "GET" && path === "/v1/sizes") return send(200, { sizes: SIZES_HERE });
     if (request.method === "POST" && path === "/v1/computers") {
-      const computer: FakeComputer = { id: randomUUID(), owner: String(body.owner), state: "running" };
+      const size = body.size ?? "small";
+      const refusal = sizeRefusal(size);
+      if (refusal) return send(400, refusal);
+      const computer: FakeComputer = { id: randomUUID(), owner: String(body.owner), state: "running", size: String(size) };
       this.computers.set(computer.id, computer);
       return send(201, { computer });
     }
@@ -81,6 +99,12 @@ export class FakeComputerService {
     if (!computer) return send(404, { error: { code: "computer_not_found", message: "There is no such Computer." } });
 
     if (request.method === "GET" && !action) return send(200, { computer });
+    if (request.method === "PATCH" && !action) {
+      const refusal = sizeRefusal(body.size);
+      if (refusal) return send(400, refusal);
+      computer.size = String(body.size);
+      return send(200, { computer });
+    }
     if (request.method === "DELETE" && !action) {
       this.computers.delete(computer.id);
       return send(204);

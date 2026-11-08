@@ -53,10 +53,11 @@ interface Computer {
   id: string;
   owner: string;
   state: string;
+  size: string;
 }
 
-async function createComputer(owner = "bot-test"): Promise<Computer> {
-  const response = await call("/v1/computers", { method: "POST", json: { owner } });
+async function createComputer(owner = "bot-test", size?: string): Promise<Computer> {
+  const response = await call("/v1/computers", { method: "POST", json: { owner, size } });
   expect(response.status).toBe(201);
   const { computer } = (await response.json()) as { computer: Computer };
   created.push(computer.id);
@@ -115,6 +116,35 @@ describe("the Computer service", { timeout: 60_000 }, () => {
     const started = await call(`/v1/computers/${computer.id}/start`, { method: "POST" });
     expect(started.status).toBe(200);
     expect(await started.json()).toMatchObject({ computer: { state: "running" } });
+  });
+
+  test("a Computer is Small unless asked for a size this machine can give, and can be resized while it runs", async () => {
+    const sizes = ((await (await call("/v1/sizes")).json()) as { sizes: Array<{ size: string; vcpus: number; memoryGb: number }> }).sizes;
+    expect(sizes.map((size) => size.size)).toContain("small");
+    expect(sizes).toContainEqual({ size: "small", name: "Small", vcpus: 2, memoryGb: 4 });
+
+    expect(await createComputer()).toMatchObject({ size: "small" });
+    const listed = sizes.at(-1)!.size;
+    const computer = await createComputer("bot-sized", listed);
+    expect(computer).toMatchObject({ size: listed, state: "running" });
+
+    const resized = await call(`/v1/computers/${computer.id}`, { method: "PATCH", json: { size: "small" } });
+    expect(await resized.json()).toMatchObject({ computer: { size: "small", state: "running" } });
+    expect(await (await call(`/v1/computers/${computer.id}`)).json()).toMatchObject({ computer: { size: "small" } });
+  });
+
+  test("a size that doesn't exist, or that this machine can't give, is refused", async () => {
+    const unknown = await call("/v1/computers", { method: "POST", json: { owner: "bot-test", size: "huge" } });
+    expect(unknown.status).toBe(400);
+    expect(await unknown.json()).toMatchObject({ error: { code: "invalid_size" } });
+
+    const listed = ((await (await call("/v1/sizes")).json()) as { sizes: Array<{ size: string }> }).sizes.map((s) => s.size);
+    const tooBig = ["small", "medium", "large", "xl"].find((size) => !listed.includes(size));
+    if (tooBig) {
+      const refused = await call("/v1/computers", { method: "POST", json: { owner: "bot-test", size: tooBig } });
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toMatchObject({ error: { code: "size_unavailable" } });
+    }
   });
 
   test("a Computer needs an owner", async () => {

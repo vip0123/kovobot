@@ -1,9 +1,10 @@
 import { type Context, Hono } from "hono";
 import type { Db } from "@kovobot/db";
+import { COMPUTER_SIZES, type ComputerSize } from "@kovobot/plans";
 import type { AppDeps } from "./app.ts";
 import { type ComputerService, ComputerServiceError, type ComputerView } from "./computers.ts";
 import type { Customer } from "./customers.ts";
-import { apiError, UUID_PATTERN } from "./http.ts";
+import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
 
 interface BotComputer {
   botId: string;
@@ -30,7 +31,9 @@ export function computerRoutes(deps: AppDeps) {
     try {
       return await handle(c, bot, deps.computers);
     } catch (error) {
-      if (error instanceof ComputerServiceError && error.status === 409) return apiError(c, 409, error.code, error.message);
+      if (error instanceof ComputerServiceError && (error.status === 400 || error.status === 409)) {
+        return apiError(c, error.status, error.code, error.message);
+      }
       console.error(error);
       return apiError(c, 503, "computer_service_unavailable", "Computers can't be reached right now. Try again in a moment.");
     }
@@ -58,14 +61,22 @@ export function computerRoutes(deps: AppDeps) {
   }));
 
   routes.post("/", forBot(async (c, bot, computers) => {
+    const size = sizeOf((await jsonBody(c)).size ?? "small");
+    if (!size) return invalidSize(c);
     if (await current(bot, computers)) return apiError(c, 409, "computer_exists", `${bot.botName} already has a Computer.`);
-    const computer = await computers.create(bot.botId);
+    const computer = await computers.create(bot.botId, size);
     // Two requests at once could each create one: the first to record its Computer keeps it.
     if (!(await setComputer(deps.db, bot.botId, null, computer.id))) {
       await computers.remove(computer.id);
       return apiError(c, 409, "computer_exists", `${bot.botName} already has a Computer.`);
     }
     return c.json({ computer: view(computer) }, 201);
+  }));
+
+  routes.patch("/", forComputer(async (c, computer, computers) => {
+    const size = sizeOf((await jsonBody(c)).size);
+    if (!size) return invalidSize(c);
+    return c.json({ computer: view(await computers.resize(computer.id, size)) });
   }));
 
   routes.post("/start", forComputer(async (c, computer, computers) => c.json({ computer: view(await computers.start(computer.id)) })));
@@ -115,9 +126,30 @@ export async function deleteBotComputer(deps: AppDeps, customerId: string, botId
   }
 }
 
+/** The sizes this install's Computer service can give, for the size picker. */
+export function computerSizes(deps: AppDeps) {
+  return async (c: Context) => {
+    if (!deps.computers) return apiError(c, 503, "computers_off", "Computers aren't switched on here.");
+    try {
+      return c.json({ sizes: await deps.computers.sizes() });
+    } catch (error) {
+      console.error(error);
+      return apiError(c, 503, "computer_service_unavailable", "Computers can't be reached right now. Try again in a moment.");
+    }
+  };
+}
+
 /** What the browser sees of a Computer. */
 function view(computer: ComputerView) {
-  return { state: computer.state };
+  return { state: computer.state, size: computer.size };
+}
+
+function sizeOf(raw: unknown): ComputerSize | null {
+  return COMPUTER_SIZES.find((size) => size.size === raw)?.size ?? null;
+}
+
+function invalidSize(c: Context) {
+  return apiError(c, 400, "invalid_size", `Pick a size: ${COMPUTER_SIZES.map((size) => size.name).join(", ")}.`);
 }
 
 async function botComputer(db: Db, customerId: string, botId: string): Promise<BotComputer | null> {

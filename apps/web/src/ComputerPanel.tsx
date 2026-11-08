@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type RFB from "@novnc/novnc";
-import { api, type Bot, type Computer, errorMessage } from "./api.ts";
+import { api, type Bot, type Computer, type ComputerSize, errorMessage } from "./api.ts";
 
 const STATE_LABELS: Record<Computer["state"], string> = {
   running: "Running",
@@ -21,7 +21,13 @@ export function ComputerPanel({
   const [busy, setBusy] = useState(false);
   const [watching, setWatching] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [sizes, setSizes] = useState<ComputerSize[]>([]);
+  const [size, setSize] = useState("small");
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.computerSizes().then(({ sizes }) => setSizes(sizes), () => setSizes([]));
+  }, []);
 
   async function act(action: () => Promise<Computer | null>) {
     setBusy(true);
@@ -38,7 +44,12 @@ export function ComputerPanel({
     }
   }
 
-  const create = () => act(async () => (await api.createComputer(bot.id)).computer);
+  const create = () => act(async () => (await api.createComputer(bot.id, size)).computer);
+  const resize = (next: string) => act(async () => (await api.resizeComputer(bot.id, next)).computer);
+  const sizeLabel = (name: string) => {
+    const spec = sizes.find((candidate) => candidate.size === name);
+    return spec ? `${spec.name}: ${spec.vcpus} CPUs, ${spec.memoryGb} GB` : name;
+  };
   const start = () => act(async () => (await api.startComputer(bot.id)).computer);
   const shutDown = () => act(async () => (await api.shutDownComputer(bot.id)).computer);
   const remove = () => act(async () => (await api.deleteComputer(bot.id), null));
@@ -48,9 +59,30 @@ export function ComputerPanel({
       <div className="computer-head">
         <h2>Computer</h2>
         <span className="muted small">
-          {computer ? STATE_LABELS[computer.state] : `None yet: a Linux desktop ${bot.name} can work on.`}
+          {computer
+            ? `${STATE_LABELS[computer.state]} · ${sizeLabel(computer.size)}`
+            : `None yet: a Linux desktop ${bot.name} can work on.`}
         </span>
         <div className="actions">
+          {sizes.length > 1 && (
+            <>
+              <label htmlFor="computer-size" className="visually-hidden">
+                Size
+              </label>
+              <select
+                id="computer-size"
+                value={computer ? computer.size : size}
+                disabled={busy}
+                onChange={(event) => (computer ? resize(event.target.value) : setSize(event.target.value))}
+              >
+                {sizes.map((option) => (
+                  <option key={option.size} value={option.size}>
+                    {sizeLabel(option.size)}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
           {!computer && (
             <button type="button" className="button primary small" disabled={busy} onClick={create}>
               {busy ? "Creating…" : "Create a Computer"}

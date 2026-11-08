@@ -1,11 +1,13 @@
 import WebSocket, { type RawData } from "ws";
 import type { ComputerServiceSettings } from "@kovobot/config";
+import type { ComputerSize, ComputerSizeSpec } from "@kovobot/plans";
 
 export type ComputerState = "running" | "asleep" | "shut_down";
 
 export interface ComputerView {
   id: string;
   state: ComputerState;
+  size: ComputerSize;
 }
 
 /** A refusal from the Computer service, with its machine-readable code. */
@@ -32,8 +34,11 @@ export interface LiveView {
 
 /** The Computer service, as its one client, the Bot service, sees it (ADR 0001). */
 export interface ComputerService {
-  /** Creates a Computer for `owner` and starts it. */
-  create(owner: string): Promise<ComputerView>;
+  /** Creates a Computer for `owner` at `size` and starts it. */
+  create(owner: string, size: ComputerSize): Promise<ComputerView>;
+  /** The sizes the Computer service's machine can give one Computer. */
+  sizes(): Promise<ComputerSizeSpec[]>;
+  resize(id: string, size: ComputerSize): Promise<ComputerView>;
   /** Null when the Computer service has no such Computer. */
   find(id: string): Promise<ComputerView | null>;
   start(id: string): Promise<ComputerView>;
@@ -77,7 +82,9 @@ export function createComputerServiceClient(settings: ComputerServiceSettings): 
   }
 
   return {
-    create: (owner) => computer("POST", "/computers", { owner }),
+    create: (owner, size) => computer("POST", "/computers", { owner, size }),
+    sizes: async () => (await call<{ sizes: ComputerSizeSpec[] }>("GET", "/sizes"))?.sizes ?? [],
+    resize: (id, size) => computer("PATCH", `/computers/${id}`, { size }),
     find: async (id) => (await call<{ computer: ComputerView }>("GET", `/computers/${id}`))?.computer ?? null,
     start: (id) => computer("POST", `/computers/${id}/start`),
     shutDown: (id) => computer("POST", `/computers/${id}/shut-down`),
