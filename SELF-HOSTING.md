@@ -113,8 +113,9 @@ A Computer is a Linux desktop with Firefox that one Bot has. You watch it live f
    The first start builds the desktop image, about 1.4 GB, which takes a few minutes.
 3. Open a Bot, choose **Create a Computer**, then **Watch live**.
 
-- **Each Computer is a container on this machine,** with a Small Computer's CPU and memory. Shutting one down keeps its files. Deleting it, or its Bot, deletes them.
-- **What a Computer can reach.** Public internet addresses only: not your network or any other private address, so not Postgres or anything else this machine keeps to itself, and not mail servers on port 25.
+- **Each Computer is a container on this machine,** at the size you pick when you create it: Small, Medium, Large or XL. Only the sizes this machine's Docker can give are offered, and you can change a Computer's size while it runs.
+- **Asleep and Shut down.** A Computer with no one watching and no Bot at work goes Asleep after 15 minutes; you can pick up to 4 hours on the Bot's page. Asleep keeps its memory and uses no CPU, and Start wakes it. After 30 days Asleep it is Shut down, which keeps its files. Deleting it, or its Bot, deletes them.
+- **What a Computer can reach.** Public internet addresses only: not your network or any other private address, so not Postgres or anything else this machine keeps to itself, and not mail servers on port 25. It can send up to 50 Mbit/s and open 20 new connections a second; `COMPUTER_OUTBOUND_MBIT` and `COMPUTER_NEW_CONNECTIONS_PER_SECOND` in `.env` change that.
 - **Docker access.** The Computer service drives Docker through its socket, which gives it full control of Docker on this machine. Run it only where you'd run Docker yourself.
 
 ## Keep it running
