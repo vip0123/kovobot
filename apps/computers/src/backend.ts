@@ -10,6 +10,8 @@ export interface ComputerBackend {
   /** Null when there is no such Computer. */
   find(id: string): Promise<BackendComputer | null>;
   start(id: string): Promise<void>;
+  /** Asleep: keeps memory and disk, and uses no CPU. Starting wakes it. */
+  sleep(id: string): Promise<void>;
   /** Keeps the disk and drops memory. */
   shutDown(id: string): Promise<void>;
   /** Deletes the Computer and its disk. */

@@ -113,6 +113,10 @@ export class FakeComputerService {
       computer.state = "running";
       return send(200, { computer });
     }
+    if (request.method === "POST" && action === "sleep") {
+      if (computer.state === "running") computer.state = "asleep";
+      return send(200, { computer });
+    }
     if (request.method === "POST" && action === "shut-down") {
       computer.state = "shut_down";
       return send(200, { computer });

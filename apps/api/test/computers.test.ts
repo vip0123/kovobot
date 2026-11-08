@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import WebSocket from "ws";
+import { sleepIdleComputers } from "../src/computer-sleep.ts";
 import { type Browser, startTestServer, uniqueEmail } from "./harness.ts";
 
 const server = startTestServer({}, { computers: true });
@@ -39,15 +40,15 @@ describe("a Bot's Computer", () => {
 
     const created = await browser.post(`/api/bots/${bot.id}/computer`);
     expect(created.status).toBe(201);
-    expect(await created.json()).toEqual({ computer: { state: "running", size: "small" } });
+    expect(await created.json()).toEqual({ computer: { state: "running", size: "small", sleepAfterMinutes: 15 } });
     expect([...server.computerService.computers.values()]).toContainEqual(expect.objectContaining({ owner: bot.id }));
 
     expect(await (await browser.post(`/api/bots/${bot.id}/computer/shut-down`)).json()).toEqual({
-      computer: { state: "shut_down", size: "small" },
+      computer: { state: "shut_down", size: "small", sleepAfterMinutes: 15 },
     });
-    expect(await computerOf(browser, bot)).toEqual({ state: "shut_down", size: "small" });
+    expect(await computerOf(browser, bot)).toEqual({ state: "shut_down", size: "small", sleepAfterMinutes: 15 });
     expect(await (await browser.post(`/api/bots/${bot.id}/computer/start`)).json()).toEqual({
-      computer: { state: "running", size: "small" },
+      computer: { state: "running", size: "small", sleepAfterMinutes: 15 },
     });
 
     expect((await deleteRequest(browser, `/api/bots/${bot.id}/computer`)).status).toBe(204);
@@ -61,15 +62,15 @@ describe("a Bot's Computer", () => {
     const sizes = await browser.get("/api/computer-sizes");
     expect(((await sizes.json()) as { sizes: Array<{ size: string }> }).sizes.map((size) => size.size)).toEqual(["small", "medium"]);
 
-    const created = await browser.post(`/api/bots/${bot.id}/computer`, { size: "medium" });
-    expect(await created.json()).toEqual({ computer: { state: "running", size: "medium" } });
+    const created = await browser.post(`/api/bots/${bot.id}/computer`, { size: "medium", sleepAfterMinutes: 15 });
+    expect(await created.json()).toEqual({ computer: { state: "running", size: "medium", sleepAfterMinutes: 15 } });
 
     const resized = await browser.send(`/api/bots/${bot.id}/computer`, {
       method: "PATCH",
       headers: { origin: server.config.appUrl, "content-type": "application/json" },
-      body: JSON.stringify({ size: "small" }),
+      body: JSON.stringify({ size: "small", sleepAfterMinutes: 15 }),
     });
-    expect(await resized.json()).toEqual({ computer: { state: "running", size: "small" } });
+    expect(await resized.json()).toEqual({ computer: { state: "running", size: "small", sleepAfterMinutes: 15 } });
   });
 
   test("a size that doesn't exist, or that this machine can't give, is refused", async () => {
@@ -108,7 +109,7 @@ describe("a Bot's Computer", () => {
       expect(response.status).toBe(404);
       expect(await response.json()).toMatchObject({ error: { code: "bot_not_found" } });
     }
-    expect(await computerOf(owner, bot)).toEqual({ state: "running", size: "small" });
+    expect(await computerOf(owner, bot)).toEqual({ state: "running", size: "small", sleepAfterMinutes: 15 });
   });
 
   test("is deleted with its Bot", async () => {
@@ -144,7 +145,7 @@ describe("a Bot's Computer", () => {
     } finally {
       server.computerService.misrouted = false;
     }
-    expect(await computerOf(browser, bot)).toEqual({ state: "running", size: "small" });
+    expect(await computerOf(browser, bot)).toEqual({ state: "running", size: "small", sleepAfterMinutes: 15 });
   });
 
   test("is unavailable where no Computer service is set up", async () => {
@@ -234,5 +235,78 @@ describe("watching a Computer live", () => {
     await expect(watch(link, owner, "https://evil.example")).rejects.toThrow("refused 403");
     await expect(watch(link, await signedInBrowser())).rejects.toThrow("refused 404");
     await expect(watch(link.replace(/token=[^&]+/, "token=made-up"), owner)).rejects.toThrow("refused 403");
+  });
+});
+
+function patchComputer(browser: Browser, bot: Bot, change: object) {
+  return browser.send(`/api/bots/${bot.id}/computer`, {
+    method: "PATCH",
+    headers: { origin: server.config.appUrl, "content-type": "application/json" },
+    body: JSON.stringify(change),
+  });
+}
+
+async function stateAfter(browser: Browser, bot: Bot, minutes: number): Promise<string> {
+  server.clock.advanceMinutes(minutes);
+  await sleepIdleComputers(server.deps);
+  return ((await computerOf(browser, bot)) as { state: string }).state;
+}
+
+describe("a Computer with nothing going on", () => {
+  test("goes Asleep after 15 minutes, and wakes when started", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    await browser.post(`/api/bots/${bot.id}/computer`);
+
+    expect(await stateAfter(browser, bot, 14)).toBe("running");
+    expect(await stateAfter(browser, bot, 2)).toBe("asleep");
+    expect(await (await browser.post(`/api/bots/${bot.id}/computer/start`)).json()).toMatchObject({ computer: { state: "running" } });
+    expect(await stateAfter(browser, bot, 14)).toBe("running");
+  });
+
+  test("stays awake while someone watches it live", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    await browser.post(`/api/bots/${bot.id}/computer`);
+    const { socket } = await watch(await liveViewLink(browser, bot), browser);
+
+    server.clock.advanceMinutes(20);
+    await new Promise((resolve) => setTimeout(resolve, 300)); // a few of the live view's checks
+    expect(await stateAfter(browser, bot, 0)).toBe("running");
+    socket.close();
+  });
+
+  test("sleeps after the time the Customer chooses, from 15 minutes to 4 hours", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    await browser.post(`/api/bots/${bot.id}/computer`);
+
+    expect(await (await patchComputer(browser, bot, { sleepAfterMinutes: 60 })).json()).toMatchObject({
+      computer: { sleepAfterMinutes: 60 },
+    });
+    expect(await stateAfter(browser, bot, 59)).toBe("running");
+    expect(await stateAfter(browser, bot, 2)).toBe("asleep");
+
+    for (const sleepAfterMinutes of [10, 241, "soon"]) {
+      const refused = await patchComputer(browser, bot, { sleepAfterMinutes });
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toMatchObject({ error: { code: "invalid_sleep_after" } });
+    }
+  });
+
+  test("is Shut down after 30 days Asleep, keeping its disk", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    await browser.post(`/api/bots/${bot.id}/computer`);
+    expect(await stateAfter(browser, bot, 16)).toBe("asleep");
+
+    // A month on, the browser's session has ended too, so the Computer service is asked directly.
+    const stateAt = async (minutes: number) => {
+      server.clock.advanceMinutes(minutes);
+      await sleepIdleComputers(server.deps);
+      return [...server.computerService.computers.values()].find((computer) => computer.owner === bot.id)?.state;
+    };
+    expect(await stateAt(29 * 24 * 60)).toBe("asleep");
+    expect(await stateAt(24 * 60)).toBe("shut_down");
   });
 });

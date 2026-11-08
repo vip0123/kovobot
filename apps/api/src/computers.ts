@@ -42,6 +42,8 @@ export interface ComputerService {
   /** Null when the Computer service has no such Computer. */
   find(id: string): Promise<ComputerView | null>;
   start(id: string): Promise<ComputerView>;
+  /** Asleep keeps memory and disk; starting wakes it. */
+  sleep(id: string): Promise<ComputerView>;
   shutDown(id: string): Promise<ComputerView>;
   /** Deletes the Computer and its disk; one that's already gone counts as deleted. */
   remove(id: string): Promise<void>;
@@ -87,6 +89,7 @@ export function createComputerServiceClient(settings: ComputerServiceSettings): 
     resize: (id, size) => computer("PATCH", `/computers/${id}`, { size }),
     find: async (id) => (await call<{ computer: ComputerView }>("GET", `/computers/${id}`))?.computer ?? null,
     start: (id) => computer("POST", `/computers/${id}/start`),
+    sleep: (id) => computer("POST", `/computers/${id}/sleep`),
     shutDown: (id) => computer("POST", `/computers/${id}/shut-down`),
     async remove(id) {
       await call("DELETE", `/computers/${id}`);

@@ -73,7 +73,14 @@ export function createDockerBackend(settings: ComputerServiceConfig["docker"]): 
       else await container(id).start().catch(ignoreStatus(304));
     },
 
+    async sleep(id) {
+      const info = await container(id).inspect();
+      if (info.State.Running && !info.State.Paused) await container(id).pause();
+    },
+
     async shutDown(id) {
+      const info = await container(id).inspect();
+      if (info.State.Paused) await container(id).unpause();
       await container(id).stop({ t: 10 }).catch(ignoreStatus(304));
     },
 

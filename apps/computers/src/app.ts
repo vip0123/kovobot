@@ -84,6 +84,11 @@ export function createComputerService(deps: ComputerServiceDeps) {
     return c.json({ computer: view((await backend.find(computer.id))!) });
   }));
 
+  app.post("/v1/computers/:id/sleep", withComputer(async (c, computer) => {
+    await backend.sleep(computer.id);
+    return c.json({ computer: view((await backend.find(computer.id))!) });
+  }));
+
   app.post("/v1/computers/:id/shut-down", withComputer(async (c, computer) => {
     await backend.shutDown(computer.id);
     return c.json({ computer: view((await backend.find(computer.id))!) });

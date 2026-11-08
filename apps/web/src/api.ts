@@ -38,6 +38,8 @@ export interface Message {
 export interface Computer {
   state: "running" | "asleep" | "shut_down";
   size: string;
+  /** It goes Asleep after this long with no viewer or Bot at work: 15 minutes to 4 hours. */
+  sleepAfterMinutes: number;
 }
 
 /** A Computer size this install can give: its CPUs and memory. */
@@ -116,6 +118,8 @@ export const api = {
     request<{ computer: Computer }>(`/bots/${botId}/computer`, { method: "POST", json: { size } }),
   resizeComputer: (botId: string, size: string) =>
     request<{ computer: Computer }>(`/bots/${botId}/computer`, { method: "PATCH", json: { size } }),
+  setComputerSleep: (botId: string, sleepAfterMinutes: number) =>
+    request<{ computer: Computer }>(`/bots/${botId}/computer`, { method: "PATCH", json: { sleepAfterMinutes } }),
   startComputer: (botId: string) => request<{ computer: Computer }>(`/bots/${botId}/computer/start`, { method: "POST" }),
   shutDownComputer: (botId: string) =>
     request<{ computer: Computer }>(`/bots/${botId}/computer/shut-down`, { method: "POST" }),

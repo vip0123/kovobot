@@ -2,6 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import type RFB from "@novnc/novnc";
 import { api, type Bot, type Computer, type ComputerSize, errorMessage } from "./api.ts";
 
+/** The idle times a Customer can pick before their Computer goes Asleep. */
+const SLEEP_CHOICES = [
+  { minutes: 15, label: "15 minutes" },
+  { minutes: 30, label: "30 minutes" },
+  { minutes: 60, label: "1 hour" },
+  { minutes: 120, label: "2 hours" },
+  { minutes: 240, label: "4 hours" },
+];
+
 const STATE_LABELS: Record<Computer["state"], string> = {
   running: "Running",
   asleep: "Asleep",
@@ -46,6 +55,7 @@ export function ComputerPanel({
 
   const create = () => act(async () => (await api.createComputer(bot.id, size)).computer);
   const resize = (next: string) => act(async () => (await api.resizeComputer(bot.id, next)).computer);
+  const setSleep = (minutes: number) => act(async () => (await api.setComputerSleep(bot.id, minutes)).computer);
   const sizeLabel = (name: string) => {
     const spec = sizes.find((candidate) => candidate.size === name);
     return spec ? `${spec.name}: ${spec.vcpus} CPUs, ${spec.memoryGb} GB` : name;
@@ -78,6 +88,25 @@ export function ComputerPanel({
                 {sizes.map((option) => (
                   <option key={option.size} value={option.size}>
                     {sizeLabel(option.size)}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+          {computer && (
+            <>
+              <label htmlFor="computer-sleep" className="muted small">
+                Sleeps after
+              </label>
+              <select
+                id="computer-sleep"
+                value={computer.sleepAfterMinutes}
+                disabled={busy}
+                onChange={(event) => setSleep(Number(event.target.value))}
+              >
+                {SLEEP_CHOICES.map((choice) => (
+                  <option key={choice.minutes} value={choice.minutes}>
+                    {choice.label}
                   </option>
                 ))}
               </select>

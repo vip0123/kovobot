@@ -11,7 +11,12 @@ interface BotComputer {
   botName: string;
   /** The Computer service's id for the Bot's Computer; null until one is created. */
   computerId: string | null;
+  /** How long the Computer may sit with nothing going on before it goes Asleep. */
+  sleepAfterMinutes: number;
 }
+
+/** The Customer picks how long a Computer may sit idle: 15 minutes to 4 hours. */
+const SLEEP_AFTER_MINUTES = { min: 15, max: 240 };
 
 type Env = { Variables: { customer: Customer } };
 type Handler = (c: Context<Env>, bot: BotComputer, computers: ComputerService) => Promise<Response>;
@@ -55,9 +60,16 @@ export function computerRoutes(deps: AppDeps) {
       return handle(c, computer, computers, bot);
     });
 
+  /** A viewer or the Bot is using the Computer: it stays awake for the Bot's chosen time from now. */
+  const touch = (bot: BotComputer, woken = false) =>
+    deps.db.query(
+      `UPDATE bots SET computer_active_at = $2${woken ? ", computer_asleep_at = NULL" : ""} WHERE id = $1`,
+      [bot.botId, deps.now()],
+    );
+
   routes.get("/", forBot(async (c, bot, computers) => {
     const computer = await current(bot, computers);
-    return c.json({ computer: computer && view(computer) });
+    return c.json({ computer: computer && view(computer, bot) });
   }));
 
   routes.post("/", forBot(async (c, bot, computers) => {
@@ -70,20 +82,41 @@ export function computerRoutes(deps: AppDeps) {
       await computers.remove(computer.id);
       return apiError(c, 409, "computer_exists", `${bot.botName} already has a Computer.`);
     }
-    return c.json({ computer: view(computer) }, 201);
+    await touch(bot, true);
+    return c.json({ computer: view(computer, bot) }, 201);
   }));
 
-  routes.patch("/", forComputer(async (c, computer, computers) => {
-    const size = sizeOf((await jsonBody(c)).size);
-    if (!size) return invalidSize(c);
-    return c.json({ computer: view(await computers.resize(computer.id, size)) });
+  // Resizes the Computer, or changes how long it may sit idle, or both.
+  routes.patch("/", forComputer(async (c, computer, computers, bot) => {
+    const body = await jsonBody(c);
+    const size = body.size === undefined ? undefined : sizeOf(body.size);
+    if (size === null) return invalidSize(c);
+    const sleepAfter = body.sleepAfterMinutes;
+    if (
+      sleepAfter !== undefined &&
+      !(Number.isInteger(sleepAfter) && (sleepAfter as number) >= SLEEP_AFTER_MINUTES.min && (sleepAfter as number) <= SLEEP_AFTER_MINUTES.max)
+    ) {
+      return apiError(c, 400, "invalid_sleep_after", "Pick from 15 minutes to 4 hours.");
+    }
+    if (size === undefined && sleepAfter === undefined) return invalidSize(c);
+    const resized = size ? await computers.resize(computer.id, size) : computer;
+    if (sleepAfter !== undefined) {
+      await deps.db.query("UPDATE bots SET computer_sleep_after_minutes = $2 WHERE id = $1", [bot.botId, sleepAfter]);
+    }
+    return c.json({ computer: view(resized, { ...bot, sleepAfterMinutes: (sleepAfter as number | undefined) ?? bot.sleepAfterMinutes }) });
   }));
 
-  routes.post("/start", forComputer(async (c, computer, computers) => c.json({ computer: view(await computers.start(computer.id)) })));
+  routes.post("/start", forComputer(async (c, computer, computers, bot) => {
+    const started = await computers.start(computer.id);
+    await touch(bot, true);
+    return c.json({ computer: view(started, bot) });
+  }));
 
-  routes.post("/shut-down", forComputer(async (c, computer, computers) =>
-    c.json({ computer: view(await computers.shutDown(computer.id)) }),
-  ));
+  routes.post("/shut-down", forComputer(async (c, computer, computers, bot) => {
+    const shutDown = await computers.shutDown(computer.id);
+    await deps.db.query("UPDATE bots SET computer_asleep_at = NULL WHERE id = $1", [bot.botId]);
+    return c.json({ computer: view(shutDown, bot) });
+  }));
 
   routes.delete("/", forComputer(async (c, computer, computers, bot) => {
     await computers.remove(computer.id);
@@ -94,16 +127,19 @@ export function computerRoutes(deps: AppDeps) {
   // A link to watch the Computer live, good for a minute; the browser opens it as a WebSocket.
   routes.post("/live-view", forComputer(async (c, computer, computers, bot) => {
     const { token, expiresAt } = await computers.liveViewToken(computer.id);
+    await touch(bot);
     return c.json({ url: `/api/bots/${bot.botId}/computer/live?token=${encodeURIComponent(token)}`, expiresAt });
   }));
 
   // Only `liveViewUpgrade` reaches this, for a browser's WebSocket: it checks the Customer, and
   // that the page is ours, before the live view is relayed. The Computer service checks the token.
-  routes.get("/live", forComputer(async (c, computer) => {
+  // It is asked again while the view stays open, which keeps the Computer awake.
+  routes.get("/live", forComputer(async (c, computer, _computers, bot) => {
     if (c.req.header("upgrade")?.toLowerCase() !== "websocket") {
       return apiError(c, 426, "upgrade_required", "Open the live view as a WebSocket.");
     }
     if (c.req.header("origin") !== deps.config.appUrl) return apiError(c, 403, "cross_site", "This request came from another website.");
+    await touch(bot);
     return c.json({ computerId: computer.id, token: c.req.query("token") ?? "" });
   }));
 
@@ -140,8 +176,8 @@ export function computerSizes(deps: AppDeps) {
 }
 
 /** What the browser sees of a Computer. */
-function view(computer: ComputerView) {
-  return { state: computer.state, size: computer.size };
+function view(computer: ComputerView, bot: BotComputer) {
+  return { state: computer.state, size: computer.size, sleepAfterMinutes: bot.sleepAfterMinutes };
 }
 
 function sizeOf(raw: unknown): ComputerSize | null {
@@ -155,7 +191,8 @@ function invalidSize(c: Context) {
 async function botComputer(db: Db, customerId: string, botId: string): Promise<BotComputer | null> {
   if (!UUID_PATTERN.test(botId)) return null;
   const { rows } = await db.query<BotComputer>(
-    'SELECT id AS "botId", name AS "botName", computer_id AS "computerId" FROM bots WHERE id = $1 AND customer_id = $2',
+    `SELECT id AS "botId", name AS "botName", computer_id AS "computerId", computer_sleep_after_minutes AS "sleepAfterMinutes"
+     FROM bots WHERE id = $1 AND customer_id = $2`,
     [botId, customerId],
   );
   return rows[0] ?? null;
