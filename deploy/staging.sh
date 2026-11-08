@@ -14,6 +14,7 @@
 #                                          stores SMTP_PASSWORD in Secret Manager
 #   GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET
 #                                          optional: turn on Sign in with Google
+#   ANTHROPIC_WORKSPACE_ID                 for an Anthropic key not scoped to a workspace (optional)
 #   OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, XAI_API_KEY, OPENROUTER_API_KEY
 #                                          our Model provider keys; deploy stores each one set
 #   LANDING_URL                            optional: the landing page that posts leads,
@@ -129,6 +130,7 @@ deploy() {
   env_vars="KOVOBOT_MODE=hosted,BILLING_ENABLED=false,PLAN_LIMITS_ENABLED=false,APP_URL=$url,API_URL=$url"
   env_vars="$env_vars,SMTP_HOST=$SMTP_HOST,SMTP_PORT=${SMTP_PORT:-587},SMTP_USER=$SMTP_USER,EMAIL_FROM=$EMAIL_FROM"
   [[ -n "${LANDING_URL:-}" ]] && env_vars="$env_vars,LANDING_URL=$LANDING_URL"
+  [[ -n "${ANTHROPIC_WORKSPACE_ID:-}" ]] && env_vars="$env_vars,ANTHROPIC_WORKSPACE_ID=$ANTHROPIC_WORKSPACE_ID"
   secrets="DATABASE_URL=DATABASE_URL:latest,SESSION_SECRET=SESSION_SECRET:latest,SMTP_PASSWORD=SMTP_PASSWORD:latest"
   if [[ -n "${GOOGLE_OAUTH_CLIENT_ID:-}" ]]; then
     env_vars="$env_vars,GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID"

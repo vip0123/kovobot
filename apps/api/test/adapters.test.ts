@@ -83,6 +83,14 @@ describe("every Model provider streams through one seam and reports usage in one
     });
   });
 
+  test("an Anthropic key that isn't scoped to a workspace names its workspace on every call", async () => {
+    const adapter = createAnthropicAdapter({ apiKey: "sk-ant-test", baseURL: anthropic.baseUrl, workspaceId: "wrkspc_01" });
+
+    await call(adapter, "claude-haiku-5-5");
+
+    expect(anthropic.requests.at(-1)!.headers["anthropic-workspace-id"]).toBe("wrkspc_01");
+  });
+
   test("Claude Haiku 5.5 has no server-side fallback, so none is asked for", async () => {
     await call(anthropicAdapter(), "claude-haiku-5-5");
 
@@ -271,6 +279,7 @@ describe("adapters built from the config", () => {
           openrouter: "key-openrouter",
         },
         localModelsUrl: null,
+        anthropicWorkspaceId: "wrkspc_01",
       });
       expect(adapters.local).toBeNull();
       const calls = [
@@ -297,12 +306,13 @@ describe("adapters built from the config", () => {
     ["openai", "anthropic", "google", "xai", "openrouter"].forEach((name, index) => {
       expect(seen[index]!.headers).toContain(`key-${name}`);
     });
+    expect(seen[1]!.headers).toContain("wrkspc_01");
   });
 
   test("no keys, no Model providers; a local model server only where one is set up", () => {
     const none = { openai: null, anthropic: null, google: null, xai: null, openrouter: null };
 
-    expect(Object.values(createModelAdapters({ modelKeys: none, localModelsUrl: null }))).toEqual([
+    expect(Object.values(createModelAdapters({ modelKeys: none, localModelsUrl: null, anthropicWorkspaceId: null }))).toEqual([
       null,
       null,
       null,
@@ -310,6 +320,7 @@ describe("adapters built from the config", () => {
       null,
       null,
     ]);
-    expect(createModelAdapters({ modelKeys: none, localModelsUrl: "http://127.0.0.1:11434/v1" }).local).not.toBeNull();
+    const local = createModelAdapters({ modelKeys: none, localModelsUrl: "http://127.0.0.1:11434/v1", anthropicWorkspaceId: null });
+    expect(local.local).not.toBeNull();
   });
 });

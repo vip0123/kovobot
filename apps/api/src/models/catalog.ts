@@ -1,4 +1,4 @@
-import type { ModelAdapters, ModelProvider } from "./adapter.ts";
+import type { ModelProvider } from "./adapter.ts";
 
 export interface ModelInfo {
   /** How Kovobot names the model; OpenRouter and local models carry a route prefix. */
@@ -24,15 +24,13 @@ const OPENROUTER_ID = /^openrouter:[a-z0-9][\w.-]*\/[\w.:-]+$/i;
 const LOCAL_ID = /^local:[\w.:/-]{1,100}$/;
 
 /**
- * The model a Bot may be set to, or undefined. Where OpenRouter is set up, any
- * OpenRouter model is allowed by its OpenRouter name; local models only where a
- * local model server is set up, which is never in the hosted service.
+ * The model an id names, whether or not its Model provider is set up here:
+ * a listed model, any OpenRouter model by its OpenRouter name, or a model on a
+ * local model server. Undefined when it names none.
  */
-export function findModel(id: unknown, adapters: ModelAdapters): ModelInfo | undefined {
+export function describeModel(id: unknown): ModelInfo | undefined {
   if (typeof id !== "string") return undefined;
-  if (OPENROUTER_ID.test(id)) {
-    return adapters.openrouter ? { id, name: id.slice("openrouter:".length), provider: "openrouter" } : undefined;
-  }
-  if (LOCAL_ID.test(id)) return adapters.local ? { id, name: `${id.slice("local:".length)} (local)`, provider: "local" } : undefined;
+  if (OPENROUTER_ID.test(id)) return { id, name: id.slice("openrouter:".length), provider: "openrouter" };
+  if (LOCAL_ID.test(id)) return { id, name: `${id.slice("local:".length)} (local)`, provider: "local" };
   return MODELS.find((model) => model.id === id);
 }
