@@ -65,6 +65,21 @@ function whole(value: unknown, min: number, max: number, what: string): number {
   return value as number;
 }
 
+/** Runs `work` with modifier keys (such as "shift" or "ctrl+shift") held down. */
+async function holding(modifiers: unknown, work: () => Promise<unknown>): Promise<void> {
+  if (modifiers === undefined || modifiers === "") {
+    await work();
+    return;
+  }
+  if (typeof modifiers !== "string" || !KEYS.test(modifiers)) throw new InvalidAction("Modifiers are key names joined by +, such as shift.");
+  await run("xdotool", ["keydown", "--", modifiers]);
+  try {
+    await work();
+  } finally {
+    await run("xdotool", ["keyup", "--", modifiers]);
+  }
+}
+
 /** Carries out one action from the common set every Driver model's actions map onto. */
 async function act(action: Record<string, unknown>): Promise<object> {
   switch (action.type) {
@@ -73,7 +88,8 @@ async function act(action: Record<string, unknown>): Promise<object> {
       return {};
     case "click": {
       const count = whole(action.count ?? 1, 1, 3, "The click count");
-      await run("xdotool", ["mousemove", ...point(action.x, action.y), "click", "--repeat", count, "--delay", 80, button(action.button ?? "left")]);
+      const at = action.x === undefined && action.y === undefined ? [] : ["mousemove", ...point(action.x, action.y)];
+      await holding(action.modifiers, () => run("xdotool", [...at, "click", "--repeat", count, "--delay", 80, button(action.button ?? "left")]));
       return {};
     }
     case "mouse_down":
@@ -103,13 +119,14 @@ async function act(action: Record<string, unknown>): Promise<object> {
       return {};
     }
     case "scroll": {
-      const at = point(action.x, action.y);
       const dx = whole(action.dx ?? 0, -50, 50, "dx");
       const dy = whole(action.dy ?? 0, -50, 50, "dy");
-      await run("xdotool", ["mousemove", ...at]);
+      if (action.x !== undefined || action.y !== undefined) await run("xdotool", ["mousemove", ...point(action.x, action.y)]);
       // Wheel buttons: 4 up, 5 down, 6 left, 7 right; one click per step.
-      if (dy !== 0) await run("xdotool", ["click", "--repeat", Math.abs(dy), "--delay", 30, dy < 0 ? 4 : 5]);
-      if (dx !== 0) await run("xdotool", ["click", "--repeat", Math.abs(dx), "--delay", 30, dx < 0 ? 6 : 7]);
+      await holding(action.modifiers, async () => {
+        if (dy !== 0) await run("xdotool", ["click", "--repeat", Math.abs(dy), "--delay", 30, dy < 0 ? 4 : 5]);
+        if (dx !== 0) await run("xdotool", ["click", "--repeat", Math.abs(dx), "--delay", 30, dx < 0 ? 6 : 7]);
+      });
       return {};
     }
     case "wait":

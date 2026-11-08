@@ -78,9 +78,22 @@ abstract class FakeModelServer {
   }
 }
 
+/** A tool use the fake streams: one of our functions, or an action of the computer toolset. */
+export interface FakeToolUse {
+  name: string;
+  input: object;
+  toolset?: "computer";
+}
+
 /** Anthropic's Messages API, streamed: POST /v1/messages. */
 export class FakeAnthropic extends FakeModelServer {
   protected readonly endings = new Set<Ending["kind"]>(["finish", "cut-off", "stop", "fall-back", "fail"]);
+  private toolUses: FakeToolUse[] = [];
+
+  /** The next reply ends by using these tools, in order, with stop_reason "tool_use". */
+  useTools(...uses: FakeToolUse[]): void {
+    this.toolUses = uses;
+  }
 
   protected respond(path: string, body: Record<string, unknown>, response: ServerResponse, ending: Ending): void {
     if (!path.startsWith("/v1/messages")) {
@@ -119,6 +132,17 @@ export class FakeAnthropic extends FakeModelServer {
       return;
     }
     send("content_block_stop", { index });
+    const uses = this.toolUses;
+    this.toolUses = [];
+    uses.forEach((use, n) => {
+      const at = index + 1 + n;
+      send("content_block_start", {
+        index: at,
+        content_block: { type: "tool_use", id: `toolu_${n}`, name: use.name, input: {}, ...(use.toolset ? { toolset_name: use.toolset } : {}) },
+      });
+      send("content_block_delta", { index: at, delta: { type: "input_json_delta", partial_json: JSON.stringify(use.input) } });
+      send("content_block_stop", { index: at });
+    });
     const usage = {
       output_tokens: 7,
       // Each attempt, as Anthropic bills it: the declined one and the one that answered.
@@ -131,7 +155,7 @@ export class FakeAnthropic extends FakeModelServer {
           }
         : {}),
     };
-    const stopReason = ending.kind === "stop" ? ending.reason : "end_turn";
+    const stopReason = ending.kind === "stop" ? ending.reason : uses.length > 0 ? "tool_use" : "end_turn";
     send("message_delta", { delta: { stop_reason: stopReason, stop_sequence: null }, usage });
     send("message_stop", {});
     response.end();
@@ -141,6 +165,12 @@ export class FakeAnthropic extends FakeModelServer {
 /** Google's Gemini API, streamed: POST /v1beta/models/{model}:streamGenerateContent?alt=sse. */
 export class FakeGemini extends FakeModelServer {
   protected readonly endings = new Set<Ending["kind"]>(["finish", "cut-off", "stop", "block-prompt", "fail"]);
+  private functionCalls: Array<{ name: string; args: object; id?: string }> = [];
+
+  /** The next reply ends with these function calls: our functions, or the computer-use tool's. */
+  callFunctions(...calls: Array<{ name: string; args: object; id?: string }>): void {
+    this.functionCalls = calls;
+  }
 
   protected respond(path: string, _body: Record<string, unknown>, response: ServerResponse, ending: Ending): void {
     if (!path.includes(":streamGenerateContent")) {
@@ -162,11 +192,14 @@ export class FakeGemini extends FakeModelServer {
       return;
     }
     const finishReason = ending.kind === "stop" ? ending.reason : ending.kind === "cut-off" ? null : "STOP";
+    const calls = this.functionCalls;
+    this.functionCalls = [];
     this.deltas.forEach((text, index) => {
       const last = index === this.deltas.length - 1;
+      const callParts = last ? calls.map((call) => ({ functionCall: call })) : [];
       send({
         candidates: [
-          { content: { parts: [{ text }], role: "model" }, index: 0, ...(last && finishReason ? { finishReason } : {}) },
+          { content: { parts: [{ text }, ...callParts], role: "model" }, index: 0, ...(last && finishReason ? { finishReason } : {}) },
         ],
         ...(last ? { usageMetadata } : {}),
       });
@@ -180,6 +213,12 @@ export class FakeChatCompletions extends FakeModelServer {
   protected readonly endings = new Set<Ending["kind"]>(["finish", "cut-off", "stop", "fail"]);
   /** The cost the server reports with usage, in US dollars, as OpenRouter does; null reports none. */
   costUsd: number | null = null;
+  private toolCalls: Array<{ id: string; name: string; args: object }> = [];
+
+  /** The next reply ends by calling these tools, their arguments streamed in two pieces each. */
+  callTools(...calls: Array<{ id: string; name: string; args: object }>): void {
+    this.toolCalls = calls;
+  }
 
   protected respond(path: string, body: Record<string, unknown>, response: ServerResponse, ending: Ending): void {
     if (path !== "/v1/chat/completions") {
@@ -198,7 +237,15 @@ export class FakeChatCompletions extends FakeModelServer {
       response.end();
       return;
     }
-    const finishReason = ending.kind === "stop" ? ending.reason : "stop";
+    const calls = this.toolCalls;
+    this.toolCalls = [];
+    calls.forEach((call, index) => {
+      const json = JSON.stringify(call.args);
+      const half = Math.floor(json.length / 2);
+      send({ choices: [{ index: 0, delta: { tool_calls: [{ index, id: call.id, type: "function", function: { name: call.name, arguments: json.slice(0, half) } }] }, finish_reason: null }] });
+      send({ choices: [{ index: 0, delta: { tool_calls: [{ index, function: { arguments: json.slice(half) } }] }, finish_reason: null }] });
+    });
+    const finishReason = ending.kind === "stop" ? ending.reason : calls.length > 0 ? "tool_calls" : "stop";
     send({ choices: [{ index: 0, delta: {}, finish_reason: finishReason }] });
     send({
       choices: [],

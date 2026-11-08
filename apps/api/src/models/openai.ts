@@ -1,5 +1,10 @@
 import OpenAI from "openai";
-import { type ModelAdapter, ModelError } from "./adapter.ts";
+import type { ResponseInputItem, ResponseOutputItem } from "openai/resources/responses/responses";
+import { type ComputerAction, type ConversationItem, type ModelAdapter, ModelError, type ModelEvent } from "./adapter.ts";
+import { xdotoolKeys } from "./computer-keys.ts";
+
+/** Pixels per wheel click when a scroll comes in pixels. */
+const PIXELS_PER_WHEEL_CLICK = 100;
 
 /**
  * OpenAI's Responses API, through the official SDK (ADR 0005). xAI documents
@@ -10,17 +15,34 @@ export function createOpenAIAdapter({ apiKey, baseURL }: { apiKey: string; baseU
   const client = new OpenAI({ apiKey, baseURL, maxRetries: 0 });
 
   return {
-    async *stream({ model, instructions, conversation }) {
+    async *stream({ model, instructions, conversation, tools, computer }) {
+      const usesTools = (tools?.length ?? 0) > 0 || computer !== undefined;
       let events;
       try {
         events = await client.responses.create({
           model,
           instructions,
-          input: conversation.map((message) => ({ role: message.role, content: message.content })),
+          input: conversation.flatMap(toInput),
           stream: true,
           // Conversations live in our database, not on the Model provider's servers.
           store: false,
-        });
+          ...(usesTools
+            ? {
+                tools: [
+                  ...(tools ?? []).map((tool) => ({
+                    type: "function" as const,
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: tool.parameters,
+                    strict: false,
+                  })),
+                  ...(computer ? [{ type: "computer" as const }] : []),
+                ],
+                // Not stored at OpenAI, so reasoning comes back encrypted for the Task to replay.
+                include: ["reasoning.encrypted_content" as const],
+              }
+            : {}),
+        } as OpenAI.Responses.ResponseCreateParamsStreaming);
       } catch (error) {
         throw new ModelError("The Model provider didn't accept the call.", { cause: error });
       }
@@ -32,9 +54,11 @@ export function createOpenAIAdapter({ apiKey, baseURL }: { apiKey: string; baseU
               yield { type: "text", text: event.delta };
               break;
             case "response.completed": {
+              const output = event.response.output;
+              yield* calls(output);
               const usage = event.response.usage;
               if (!usage) {
-                yield { type: "done", usage: [] };
+                yield { type: "done", usage: [], turn: output };
                 return;
               }
               const cached = usage.input_tokens_details?.cached_tokens ?? 0;
@@ -44,6 +68,7 @@ export function createOpenAIAdapter({ apiKey, baseURL }: { apiKey: string; baseU
               const ticks = (usage as { cost_in_usd_ticks?: unknown }).cost_in_usd_ticks;
               yield {
                 type: "done",
+                turn: output,
                 usage: [
                   {
                     model,
@@ -71,4 +96,95 @@ export function createOpenAIAdapter({ apiKey, baseURL }: { apiKey: string; baseU
       throw new ModelError("The reply ended without finishing.");
     },
   };
+}
+
+/** The model's calls in its output: our function tools' calls, and its turn on the Computer. */
+function* calls(output: ResponseOutputItem[]): Generator<ModelEvent> {
+  for (const item of output) {
+    if (item.type === "function_call") {
+      let input: Record<string, unknown> = {};
+      try {
+        input = JSON.parse(item.arguments) as Record<string, unknown>;
+      } catch {
+        // A call whose arguments aren't JSON gets an empty input; the tool says what's missing.
+      }
+      yield { type: "tool_call", call: { id: item.call_id, name: item.name, input } };
+    }
+    if (item.type === "computer_call") {
+      const raw = item as unknown as {
+        call_id: string;
+        action?: Record<string, unknown>;
+        actions?: Array<Record<string, unknown>>;
+        pending_safety_checks?: Array<{ id: string; message?: string | null }>;
+      };
+      const actions = (raw.actions ?? (raw.action ? [raw.action] : [])).flatMap(computerActions);
+      yield {
+        type: "computer_call",
+        call: {
+          // One output answers the whole batch, with the screen after its last action.
+          steps: [{ id: raw.call_id, name: "computer_call", actions, screenshot: true }],
+          safetyChecks: (raw.pending_safety_checks ?? []).map((check) => ({ id: check.id, message: check.message ?? "" })),
+        },
+      };
+    }
+  }
+}
+
+/** One of the computer tool's actions, as the Computer agent's actions. */
+function computerActions(action: Record<string, unknown>): ComputerAction[] {
+  const x = Math.round(Number(action.x));
+  const y = Math.round(Number(action.y));
+  const modifiers = Array.isArray(action.keys) && action.keys.length > 0 ? xdotoolKeys(action.keys as string[]) : undefined;
+  const wheel = (pixels: unknown) => {
+    const value = Number(pixels ?? 0);
+    if (!value) return 0;
+    return Math.sign(value) * Math.min(50, Math.max(1, Math.round(Math.abs(value) / PIXELS_PER_WHEEL_CLICK)));
+  };
+  switch (action.type) {
+    case "click":
+      if (action.button === "back") return [{ type: "keys", keys: "alt+Left" }];
+      if (action.button === "forward") return [{ type: "keys", keys: "alt+Right" }];
+      return [{ type: "click", x, y, button: action.button === "right" ? "right" : action.button === "wheel" ? "middle" : "left", count: 1, ...(modifiers ? { modifiers } : {}) }];
+    case "double_click":
+      return [{ type: "click", x, y, button: "left", count: 2, ...(modifiers ? { modifiers } : {}) }];
+    case "keypress":
+      return [{ type: "keys", keys: xdotoolKeys(action.keys as string[]) }];
+    case "type":
+      return [{ type: "type", text: String(action.text ?? "") }];
+    case "scroll":
+      return [{ type: "scroll", x, y, dx: wheel(action.scroll_x), dy: wheel(action.scroll_y), ...(modifiers ? { modifiers } : {}) }];
+    case "drag": {
+      const path = Array.isArray(action.path) ? (action.path as Array<{ x: number; y: number }>) : [];
+      return [{ type: "drag", path: path.map((point) => [Math.round(point.x), Math.round(point.y)] as [number, number]) }];
+    }
+    case "move":
+      return [{ type: "move", x, y }];
+    case "wait":
+      return [{ type: "wait", ms: 2000 }];
+    default:
+      // A screenshot comes with every result anyway.
+      return [];
+  }
+}
+
+/** One conversation item as Responses API input items. */
+function toInput(item: ConversationItem): ResponseInputItem[] {
+  switch (item.role) {
+    case "user":
+    case "assistant":
+      return [{ role: item.role, content: item.content }];
+    case "turn":
+      return item.raw as ResponseInputItem[];
+    case "tool_results":
+      return item.results.map((result) => ({ type: "function_call_output" as const, call_id: result.toolCallId, output: result.output }));
+    case "computer_results":
+      return item.results.map(
+        (result) =>
+          ({
+            type: "computer_call_output",
+            call_id: result.id,
+            output: { type: "computer_screenshot", image_url: `data:image/png;base64,${result.screenshot ?? ""}` },
+          }) as ResponseInputItem,
+      );
+  }
 }

@@ -9,13 +9,86 @@ export interface ChatMessage {
   content: string;
 }
 
+/** A function our own code runs when the model calls it, such as handing work to the Bot's Computer. */
+export interface FunctionTool {
+  name: string;
+  description: string;
+  /** JSON Schema of the call's input. */
+  parameters: Record<string, unknown>;
+}
+
+export interface ToolCall {
+  /** The Model provider's id for the call, which its result answers. */
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+/** One action on a Computer, from the set the Computer agent carries out (apps/computers/agent). */
+export type ComputerAction =
+  | { type: "screenshot" }
+  | { type: "cursor_position" }
+  | { type: "move"; x: number; y: number }
+  /** Without x and y it clicks where the mouse is. */
+  | { type: "click"; x?: number; y?: number; button: "left" | "middle" | "right"; count: 1 | 2 | 3; modifiers?: string }
+  | { type: "mouse_down" | "mouse_up"; button: "left" }
+  | { type: "drag"; path: Array<[number, number]> }
+  | { type: "type"; text: string }
+  | { type: "keys"; keys: string }
+  /** In wheel clicks; without x and y it scrolls where the mouse is. */
+  | { type: "scroll"; x?: number; y?: number; dx: number; dy: number; modifiers?: string }
+  | { type: "wait"; ms: number };
+
+/** One step of a Driver model's turn on the Computer; one result answers it. */
+export interface ComputerStep {
+  /** The Model provider's id for the step. */
+  id: string;
+  /** The Model provider's name for the action, which some of them need in the result. */
+  name: string;
+  /** Set when the Computer can't do what was asked: the step's result says so instead. */
+  unsupported?: string;
+  /** Carried out in order. */
+  actions: ComputerAction[];
+  /** Whether its result shows the screen as it is afterwards. */
+  screenshot: boolean;
+}
+
+/** A Driver model's turn on the Computer. */
+export interface ComputerCall {
+  steps: ComputerStep[];
+  /** What the Model provider wants the Customer to confirm before it carries on (OpenAI, Google). */
+  safetyChecks: Array<{ id: string; message: string }>;
+}
+
+/** What came of one step: the screen afterwards, a note, or why it failed. */
+export interface ComputerStepResult {
+  id: string;
+  name: string;
+  /** The screen afterwards, as base64 PNG. */
+  screenshot?: string;
+  text?: string;
+  error?: string;
+}
+
+/** One item of the conversation a model call sees, as the agent loop builds it within a Task. */
+export type ConversationItem =
+  | ChatMessage
+  /** An earlier answer in this Task, in the Model provider's own shape, replayed exactly as it came. */
+  | { role: "turn"; raw: unknown }
+  | { role: "tool_results"; results: Array<{ toolCallId: string; name: string; output: string }> }
+  | { role: "computer_results"; results: ComputerStepResult[] };
+
 export interface ModelRequest {
   /** The model as its Model provider names it. */
   model: string;
   /** What the Bot is and how it should behave. */
   instructions: string;
-  /** The conversation so far, oldest first, ending with the latest message to answer. */
-  conversation: ChatMessage[];
+  /** The conversation so far, oldest first, ending with the latest message or results to answer. */
+  conversation: ConversationItem[];
+  /** Functions the model may call; it then answers with the calls, and the next call gets their results. */
+  tools?: FunctionTool[];
+  /** Gives a Driver model its Model provider's computer-use tool, for a screen this size. */
+  computer?: { width: number; height: number };
 }
 
 /**
@@ -43,12 +116,15 @@ export interface ModelUsage {
 
 export type ModelEvent =
   | { type: "text"; text: string }
+  | { type: "tool_call"; call: ToolCall }
+  | { type: "computer_call"; call: ComputerCall }
   /**
    * One entry per billed attempt: more than one when a server-side fallback
    * ran. Empty when the Model provider reported none; such a call has no cost
-   * evidence.
+   * evidence. `turn` is the whole answer in the Model provider's own shape, for
+   * the next call in the same Task to replay.
    */
-  | { type: "done"; usage: ModelUsage[] };
+  | { type: "done"; usage: ModelUsage[]; turn: unknown };
 
 export interface ModelAdapter {
   /** One call to the Model provider: a single HTTP attempt, streamed. Throws ModelError if it fails. */

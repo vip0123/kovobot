@@ -1,32 +1,54 @@
 import OpenAI from "openai";
-import { type ModelAdapter, ModelError, type ModelUsage } from "./adapter.ts";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import { type ConversationItem, type ModelAdapter, ModelError, type ModelUsage } from "./adapter.ts";
 
 /**
  * Any OpenAI-compatible Chat Completions API, through the OpenAI SDK: OpenRouter
  * and, in self-hosted installs, local model servers (ADR 0005). Model ids carry
  * a prefix naming the route ("openrouter:", "local:"), which is dropped here.
+ * Neither can be a Driver model, so there is no computer-use tool here.
  */
 export function createOpenAICompatibleAdapter({ apiKey, baseURL }: { apiKey: string; baseURL: string }): ModelAdapter {
   // One HTTP attempt per call, never a hidden retry: each attempt gets its own Hold (ADR 0004).
   const client = new OpenAI({ apiKey, baseURL, maxRetries: 0 });
 
   return {
-    async *stream({ model, instructions, conversation }) {
+    async *stream({ model, instructions, conversation, tools }) {
       let usage: ModelUsage[] = [];
       let finishReason: string | null = null;
+      let text = "";
+      // Each call's id, name and arguments arrive in pieces, keyed by its index.
+      const calls: Array<{ id: string; name: string; arguments: string }> = [];
       try {
         const body = {
           model: model.replace(/^(openrouter|local):/, ""),
-          messages: [{ role: "system" as const, content: instructions }, ...conversation],
+          messages: [{ role: "system" as const, content: instructions }, ...conversation.flatMap(toMessages)],
           stream: true as const,
           stream_options: { include_usage: true },
           // OpenRouter adds its cost to the usage when asked; other servers ignore this.
           usage: { include: true },
+          ...((tools ?? []).length > 0
+            ? {
+                tools: tools!.map((tool) => ({
+                  type: "function" as const,
+                  function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+                })),
+              }
+            : {}),
         };
         const chunks = await client.chat.completions.create(body as OpenAI.ChatCompletionCreateParamsStreaming);
         for await (const chunk of chunks) {
-          const text = chunk.choices[0]?.delta?.content;
-          if (text) yield { type: "text", text };
+          const delta = chunk.choices[0]?.delta;
+          if (delta?.content) {
+            text += delta.content;
+            yield { type: "text", text: delta.content };
+          }
+          for (const piece of delta?.tool_calls ?? []) {
+            const call = (calls[piece.index] ??= { id: "", name: "", arguments: "" });
+            if (piece.id) call.id = piece.id;
+            if (piece.function?.name) call.name += piece.function.name;
+            if (piece.function?.arguments) call.arguments += piece.function.arguments;
+          }
           finishReason = chunk.choices[0]?.finish_reason ?? finishReason;
           if (chunk.usage) {
             const cached = chunk.usage.prompt_tokens_details?.cached_tokens ?? 0;
@@ -53,7 +75,39 @@ export function createOpenAICompatibleAdapter({ apiKey, baseURL }: { apiKey: str
       if (finishReason === "content_filter") {
         throw new ModelError("The model server stopped the reply (content_filter).", { usage });
       }
-      yield { type: "done", usage };
+      for (const call of calls.filter(Boolean)) {
+        let input: Record<string, unknown> = {};
+        try {
+          input = call.arguments ? (JSON.parse(call.arguments) as Record<string, unknown>) : {};
+        } catch {
+          // Arguments that aren't JSON give an empty input; the tool says what's missing.
+        }
+        yield { type: "tool_call", call: { id: call.id, name: call.name, input } };
+      }
+      const turn: ChatCompletionMessageParam = {
+        role: "assistant",
+        content: text,
+        ...(calls.length > 0
+          ? { tool_calls: calls.filter(Boolean).map((call) => ({ id: call.id, type: "function" as const, function: { name: call.name, arguments: call.arguments } })) }
+          : {}),
+      };
+      yield { type: "done", usage, turn };
     },
   };
+}
+
+/** One conversation item as Chat Completions messages. */
+function toMessages(item: ConversationItem): ChatCompletionMessageParam[] {
+  switch (item.role) {
+    case "user":
+    case "assistant":
+      return [{ role: item.role, content: item.content }];
+    case "turn":
+      return [item.raw as ChatCompletionMessageParam];
+    case "tool_results":
+      return item.results.map((result) => ({ role: "tool" as const, tool_call_id: result.toolCallId, content: result.output }));
+    case "computer_results":
+      // Never sent: these servers aren't Driver models.
+      return [];
+  }
 }
