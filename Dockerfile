@@ -11,6 +11,7 @@ COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 COPY packages/config/package.json packages/config/
 COPY packages/db/package.json packages/db/
+COPY packages/plans/package.json packages/plans/
 RUN pnpm install --frozen-lockfile
 COPY . .
 # Only the web app goes in the image; the landing page ships to GitHub Pages.
@@ -23,10 +24,12 @@ COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 COPY packages/config/package.json packages/config/
 COPY packages/db/package.json packages/db/
+COPY packages/plans/package.json packages/plans/
 RUN pnpm install --prod --frozen-lockfile --filter "@kovobot/api..."
 COPY apps/api/src apps/api/src
 COPY packages/config/src packages/config/src
 COPY packages/db/src packages/db/src
+COPY packages/plans/src packages/plans/src
 COPY packages/db/migrations packages/db/migrations
 COPY --from=build /app/apps/web/dist apps/web/dist
 # Serving the web build makes the web app's URL default to the API's (one origin).
