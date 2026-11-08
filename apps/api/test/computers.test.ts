@@ -310,3 +310,39 @@ describe("a Computer with nothing going on", () => {
     expect(await stateAt(24 * 60)).toBe("shut_down");
   });
 });
+
+describe("a Bot's Driver model", () => {
+  const patchBot = (browser: Browser, bot: Bot, change: object) =>
+    browser.send(`/api/bots/${bot.id}`, {
+      method: "PATCH",
+      headers: { origin: server.config.appUrl, "content-type": "application/json" },
+      body: JSON.stringify(change),
+    });
+
+  test("is picked by the Customer from OpenAI, Anthropic and Google models set up here, and can be cleared", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    expect(bot).toMatchObject({ driverModel: null });
+
+    expect(await (await patchBot(browser, bot, { driverModel: "claude-sonnet-5-5" })).json()).toMatchObject({
+      bot: { driverModel: "claude-sonnet-5-5", model: "gpt-6-luna" },
+    });
+    expect(await (await patchBot(browser, bot, { driverModel: "gpt-6-luna" })).json()).toMatchObject({ bot: { driverModel: "gpt-6-luna" } });
+    expect(await (await patchBot(browser, bot, { driverModel: null })).json()).toMatchObject({ bot: { driverModel: null } });
+  });
+
+  test("can't be an xAI or OpenRouter model, or one whose Model provider isn't set up here", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    for (const [driverModel, code] of [
+      ["grok-4.7", "not_a_driver_model"],
+      ["openrouter:anthropic/claude-sonnet-5-5", "not_a_driver_model"],
+      ["gemini-4-argon", "model_unavailable"],
+      ["no-such-model", "unknown_model"],
+    ]) {
+      const response = await patchBot(browser, bot, { driverModel });
+      expect(response.status, driverModel).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code } });
+    }
+  });
+});
