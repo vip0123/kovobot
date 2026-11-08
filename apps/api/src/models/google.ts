@@ -148,7 +148,10 @@ function toContent(item: ConversationItem): Content {
   const id = (value: string) => (value.startsWith(MADE_UP_ID) ? {} : { id: value });
   switch (item.role) {
     case "user":
-      return { role: "user", parts: [{ text: item.content }] };
+      return {
+        role: "user",
+        parts: [{ text: item.content }, ...(item.screenshot ? [{ inlineData: { mimeType: "image/png", data: item.screenshot } }] : [])],
+      };
     case "assistant":
       return { role: "model", parts: [{ text: item.content }] };
     case "turn":

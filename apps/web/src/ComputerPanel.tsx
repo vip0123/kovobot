@@ -234,6 +234,17 @@ function Screen({ botId, onReconnect }: { botId: string; onReconnect: () => void
     };
   }, [botId]);
 
+  // A take-over is a lease: renewed while this view holds it, handed back when the view goes,
+  // so a Bot never waits on a tab that was closed.
+  useEffect(() => {
+    if (!inControl) return;
+    const renew = setInterval(() => void api.setComputerControl(botId, true).catch(() => {}), 20_000);
+    return () => {
+      clearInterval(renew);
+      void api.setComputerControl(botId, false).catch(() => {});
+    };
+  }, [inControl, botId]);
+
   // Taking control tells the Bot to wait; handing back lets it carry on.
   async function toggleControl() {
     const rfb = viewer.current;

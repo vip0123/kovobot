@@ -7,6 +7,8 @@ export type ModelProvider = "openai" | "anthropic" | "google" | "xai" | "openrou
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  /** A Driver model's task comes with the screen as it is, as base64 PNG. */
+  screenshot?: string;
 }
 
 /** A function our own code runs when the model calls it, such as handing work to the Bot's Computer. */
@@ -56,7 +58,7 @@ export interface ComputerStep {
 /** A Driver model's turn on the Computer. */
 export interface ComputerCall {
   steps: ComputerStep[];
-  /** What the Model provider wants the Customer to confirm before it carries on (OpenAI, Google). */
+  /** What the Model provider wants the Customer's Approval for before it carries on (OpenAI, Google). */
   safetyChecks: Array<{ id: string; message: string }>;
 }
 

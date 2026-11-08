@@ -5,7 +5,10 @@
 // dependencies: the image copies this one file and Node runs it as it is.
 import { execFile } from "node:child_process";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { mkdtempSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -17,7 +20,11 @@ const port = 4000;
 const vncPort = 5900;
 /** The virtual display start.sh starts (Xvfb :1 -screen 0 1280x800x24). */
 const SCREEN = { width: 1280, height: 800 };
-const SCREENSHOT_PATH = "/tmp/kovobot-screenshot.png";
+// Screenshots go to a folder only root can enter, made fresh at start: /tmp is shared with
+// the desktop, where a planted file or link could forge a screenshot or redirect root's write.
+const SCREENSHOT_PATH = join(mkdtempSync(join(tmpdir(), "kovobot-agent-")), "screen.png");
+/** Text is typed this many characters at a time, so no one xdotool run outlasts its time limit. */
+const TYPE_CHUNK = 200;
 if (token.length < 32) {
   console.error("KOVOBOT_AGENT_TOKEN must be set by the Computer service (at least 32 characters).");
   process.exit(1);
@@ -110,7 +117,9 @@ async function act(action: Record<string, unknown>): Promise<object> {
       if (typeof action.text !== "string" || action.text.length < 1 || action.text.length > 10_000) {
         throw new InvalidAction("Typing takes 1 to 10,000 characters of text.");
       }
-      await run("xdotool", ["type", "--delay", 12, "--", action.text]);
+      for (let at = 0; at < action.text.length; at += TYPE_CHUNK) {
+        await run("xdotool", ["type", "--delay", 12, "--", action.text.slice(at, at + TYPE_CHUNK)]);
+      }
       return {};
     }
     case "keys": {

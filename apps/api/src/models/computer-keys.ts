@@ -37,20 +37,40 @@ const XDOTOOL_NAMES: Record<string, string> = {
   capslock: "Caps_Lock",
 };
 
-/** One key in xdotool's naming: a known name mapped, F-keys and single characters kept. */
-function xdotoolKey(name: string): string {
+/** Punctuation keys, which xdotool names by keysym. */
+const PUNCTUATION: Record<string, string> = {
+  "/": "slash",
+  "\\": "backslash",
+  ".": "period",
+  ",": "comma",
+  "-": "minus",
+  "=": "equal",
+  "+": "plus",
+  ";": "semicolon",
+  "'": "apostrophe",
+  "`": "grave",
+  "[": "bracketleft",
+  "]": "bracketright",
+  " ": "space",
+};
+
+/**
+ * One key in xdotool's naming: a known name or punctuation mapped, F-keys kept. A lone
+ * letter keeps its case ("A" types a capital); in a combination it names the key ("ctrl+a").
+ */
+function xdotoolKey(name: string, inCombination: boolean): string {
+  if (PUNCTUATION[name]) return PUNCTUATION[name];
   const known = XDOTOOL_NAMES[name.toLowerCase()];
   if (known) return known;
   if (/^f([1-9]|1[0-2])$/i.test(name)) return name.toUpperCase();
-  return name.length === 1 ? name.toLowerCase() : name;
+  return name.length === 1 && inCombination ? name.toLowerCase() : name;
 }
 
 /** A key combination, as separate names or one "a+b" string, in xdotool's "ctrl+shift+t" form. */
 export function xdotoolKeys(keys: string | string[]): string {
-  const names = Array.isArray(keys) ? keys : keys.split("+");
-  return names
-    .map((name) => name.trim())
-    .filter(Boolean)
-    .map(xdotoolKey)
-    .join("+");
+  if (keys === "+") return "plus";
+  // "ctrl++" is ctrl and the plus key: a "+" right after another one is the key itself.
+  const names = Array.isArray(keys) ? keys : keys.split(/(?<!\+)\+/).map((name) => name || "+");
+  const kept = names.map((name) => (name === " " ? name : name.trim())).filter(Boolean);
+  return kept.map((name) => xdotoolKey(name, kept.length > 1)).join("+");
 }

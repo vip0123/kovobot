@@ -198,7 +198,15 @@ function toMessage(item: ConversationItem): BetaMessageParam {
   switch (item.role) {
     case "user":
     case "assistant":
-      return { role: item.role, content: item.content };
+      return {
+        role: item.role,
+        content: item.screenshot
+          ? [
+              { type: "text" as const, text: item.content },
+              { type: "image" as const, source: { type: "base64" as const, media_type: "image/png" as const, data: item.screenshot } },
+            ]
+          : item.content,
+      };
     case "turn":
       return { role: "assistant", content: item.raw as BetaContentBlockParam[] };
     case "tool_results":

@@ -1,6 +1,6 @@
 import Docker from "dockerode";
 import type { ComputerServiceConfig } from "@kovobot/config";
-import { COMPUTER_SIZES, type ComputerSize } from "@kovobot/plans";
+import { COMPUTER_SIZES, type ComputerSize, computerSize } from "@kovobot/plans";
 import { AGENT_PORT, type BackendComputer, type ComputerBackend, type ComputerState } from "./backend.ts";
 
 const AGENT_PORT_KEY = `${AGENT_PORT}/tcp`;
@@ -8,7 +8,7 @@ const GIB = 1024 ** 3;
 
 /** A size's CPUs and memory as Docker limits them; no swap, so memory is what the size says. */
 function limits(size: ComputerSize) {
-  const spec = COMPUTER_SIZES.find((candidate) => candidate.size === size)!;
+  const spec = computerSize(size);
   return { NanoCpus: spec.vcpus * 1e9, Memory: spec.memoryGb * GIB, MemorySwap: spec.memoryGb * GIB };
 }
 

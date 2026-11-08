@@ -56,8 +56,9 @@ describe("a Bot with a Computer and a Driver model", () => {
 
     const events = await serverSentEvents(await chat(browser, bot, "When is Kovobot open?"));
 
-    // The Driver model's actions reached the Computer, and it was shown the screen.
+    // The Driver model saw the screen with its task, its actions reached the Computer, and it was shown the screen.
     expect(actionsOn(bot)).toEqual([
+      { type: "screenshot" },
       { type: "click", x: 10, y: 20, button: "left", count: 1 },
       { type: "type", text: "kovobot.com" },
       { type: "screenshot" },
@@ -66,6 +67,11 @@ describe("a Bot with a Computer and a Driver model", () => {
     expect(driverResults).toContainEqual(
       expect.objectContaining({ content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: SCREENSHOT_PNG } }] }),
     );
+    const task = (server.anthropic.requests.at(-1)!.body.messages as Array<{ content: unknown }>)[0]!.content;
+    expect(task).toEqual([
+      { type: "text", text: "Find the opening hours on kovobot.com." },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: SCREENSHOT_PNG } },
+    ]);
     // The Driver model was told to stop and ask before paying, sending or deleting.
     expect(String(server.anthropic.requests.at(-1)!.body.system)).toMatch(/stop and ask before paying, sending .* or deleting/i);
     // Its report went back to the chat model as the tool's result.
@@ -74,7 +80,8 @@ describe("a Bot with a Computer and a Driver model", () => {
     expect(events.at(-1)).toMatchObject({ event: "done", data: { message: { role: "assistant" } } });
   });
 
-  test("waits while the Customer has control of the Computer, and carries on once they hand back", async () => {
+  // It waits on purpose, polling, so it gets more time than most.
+  test("waits while the Customer has control, then looks again instead of doing what it planned before", { timeout: 20_000 }, async () => {
     const { browser, bot } = await botWithComputer("claude-haiku-5-5");
     const control = (inControl: boolean) => browser.post(`/api/bots/${bot.id}/computer/control`, { inControl });
     expect(await (await control(true)).json()).toMatchObject({ computer: { customerInControl: true } });
@@ -93,13 +100,20 @@ describe("a Bot with a Computer and a Driver model", () => {
     // Read as it streams: a reply nobody reads stops at its first event.
     const replying = chat(browser, bot, "Close that window.").then(serverSentEvents);
 
-    while (server.anthropic.requests.length === asked) await new Promise((resolve) => setTimeout(resolve, 20));
-    await new Promise((resolve) => setTimeout(resolve, 700));
-    expect(actionsOn(bot)).toEqual([]);
-
-    expect(await (await control(false)).json()).toMatchObject({ computer: { customerInControl: false } });
-    const events = await replying;
-    expect(actionsOn(bot)).toEqual([{ type: "keys", keys: "alt+F4" }]);
+    let events;
+    try {
+      while (server.anthropic.requests.length === asked) await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      expect(actionsOn(bot)).toEqual([{ type: "screenshot" }]);
+    } finally {
+      // Always hand back, so a failure here never leaves a Bot waiting into the next test.
+      expect(await (await control(false)).json()).toMatchObject({ computer: { customerInControl: false } });
+      events = await replying;
+    }
+    // The step planned on the screen from before the take-over was skipped, and the model told to look again.
+    expect(actionsOn(bot)).toEqual([{ type: "screenshot" }]);
+    const results = (server.anthropic.requests.at(-1)!.body.messages as Array<{ content: unknown }>).at(-1)!.content;
+    expect(JSON.stringify(results)).toMatch(/Skipped: the Customer used the Computer meanwhile/);
     expect(events).toContainEqual({ event: "status", data: { text: "Scout is waiting while you have control of its Computer." } });
   });
 
@@ -118,9 +132,10 @@ describe("a Bot with a Computer and a Driver model", () => {
 
     await serverSentEvents(await chat(browser, bot, "Pay the invoice."));
 
-    expect(actionsOn(bot)).toEqual([]);
+    expect(actionsOn(bot)).toEqual([{ type: "screenshot" }]);
     const result = (server.anthropic.requests.at(-1)!.body.messages as Array<{ content: unknown }>).at(-1)!.content as Array<{ content: string }>;
     expect(result[0]!.content).toMatch(/This page takes payments\./);
+    expect(result[0]!.content).toMatch(/take over the Computer/);
   });
 
   test("wakes the Computer from Asleep before driving it", async () => {
@@ -139,7 +154,27 @@ describe("a Bot with a Computer and a Driver model", () => {
 
     await serverSentEvents(await chat(browser, bot, "What's on the screen?"));
     expect(computer.state).toBe("running");
-    expect(actionsOn(bot)).toEqual([{ type: "screenshot" }]);
+    expect(actionsOn(bot)).toEqual([{ type: "screenshot" }, { type: "screenshot" }]);
+  });
+
+  test("carries on once a take-over the Customer's page stopped renewing has lapsed", async () => {
+    const { browser, bot } = await botWithComputer("claude-haiku-5-5");
+    await browser.post(`/api/bots/${bot.id}/computer/control`, { inControl: true });
+    server.clock.advanceMinutes(2);
+    expect(await (await browser.get(`/api/bots/${bot.id}/computer`)).json()).toMatchObject({ computer: { customerInControl: false } });
+
+    server.openai.addOutput({
+      type: "function_call",
+      id: "fc_5",
+      call_id: "call_5",
+      name: "use_computer",
+      arguments: JSON.stringify({ task: "Press Enter." }),
+      status: "completed",
+    });
+    server.anthropic.useTools({ name: "key", input: { text: "Return" }, toolset: "computer" });
+    const events = await serverSentEvents(await chat(browser, bot, "Press Enter."));
+    expect(actionsOn(bot)).toEqual([{ type: "screenshot" }, { type: "keys", keys: "Return" }]);
+    expect(events.map((event) => event.event)).not.toContain("waiting");
   });
 });
 

@@ -1,9 +1,10 @@
 import { type Context, Hono } from "hono";
 import type { Db } from "@kovobot/db";
-import { COMPUTER_SIZES, type ComputerSize } from "@kovobot/plans";
+import { ASLEEP_AFTER_MINUTES, COMPUTER_SIZES, type ComputerSize } from "@kovobot/plans";
 import type { AppDeps } from "./app.ts";
 import { type ComputerService, ComputerServiceError, type ComputerView } from "./computers.ts";
 import type { Customer } from "./customers.ts";
+import { CONTROL_LEASE_SECONDS } from "./driver.ts";
 import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
 
 interface BotComputer {
@@ -13,12 +14,12 @@ interface BotComputer {
   computerId: string | null;
   /** How long the Computer may sit with nothing going on before it goes Asleep. */
   sleepAfterMinutes: number;
-  /** Whether the Customer has the mouse and keyboard; the Bot waits meanwhile. */
-  customerInControl: boolean;
+  /** When the Customer last took or renewed control of the mouse and keyboard; null when they handed back. */
+  controlledAt: Date | null;
 }
 
 /** The Customer picks how long a Computer may sit idle: 15 minutes to 4 hours. */
-const SLEEP_AFTER_MINUTES = { min: 15, max: 240 };
+const SLEEP_AFTER_MINUTES = { min: ASLEEP_AFTER_MINUTES, max: 4 * 60 };
 
 type Env = { Variables: { customer: Customer } };
 type Handler = (c: Context<Env>, bot: BotComputer, computers: ComputerService) => Promise<Response>;
@@ -69,6 +70,14 @@ export function computerRoutes(deps: AppDeps) {
       [bot.botId, deps.now()],
     );
 
+  /** What the browser sees of a Computer, as of now. */
+  const view = (computer: ComputerView, bot: BotComputer) => ({
+    state: computer.state,
+    size: computer.size,
+    sleepAfterMinutes: bot.sleepAfterMinutes,
+    customerInControl: bot.controlledAt !== null && deps.now().getTime() - bot.controlledAt.getTime() < CONTROL_LEASE_SECONDS * 1000,
+  });
+
   routes.get("/", forBot(async (c, bot, computers) => {
     const computer = await current(bot, computers);
     return c.json({ computer: computer && view(computer, bot) });
@@ -98,7 +107,12 @@ export function computerRoutes(deps: AppDeps) {
       sleepAfter !== undefined &&
       !(Number.isInteger(sleepAfter) && (sleepAfter as number) >= SLEEP_AFTER_MINUTES.min && (sleepAfter as number) <= SLEEP_AFTER_MINUTES.max)
     ) {
-      return apiError(c, 400, "invalid_sleep_after", "Pick from 15 minutes to 4 hours.");
+      return apiError(
+        c,
+        400,
+        "invalid_sleep_after",
+        `Pick from ${SLEEP_AFTER_MINUTES.min} minutes to ${SLEEP_AFTER_MINUTES.max / 60} hours.`,
+      );
     }
     if (size === undefined && sleepAfter === undefined) return invalidSize(c);
     const resized = size ? await computers.resize(computer.id, size) : computer;
@@ -127,12 +141,14 @@ export function computerRoutes(deps: AppDeps) {
   }));
 
   // The Customer takes the mouse and keyboard, or hands them back; a Bot at work waits meanwhile.
+  // Taking control is a lease the page renews while it holds it, so a closed tab lets the Bot carry on.
   routes.post("/control", forComputer(async (c, computer, _computers, bot) => {
     const inControl = (await jsonBody(c)).inControl;
     if (typeof inControl !== "boolean") return apiError(c, 400, "invalid_control", "Say whether you take control: true or false.");
-    await deps.db.query("UPDATE bots SET computer_controlled_at = $2 WHERE id = $1", [bot.botId, inControl ? deps.now() : null]);
+    const controlledAt = inControl ? deps.now() : null;
+    await deps.db.query("UPDATE bots SET computer_controlled_at = $2 WHERE id = $1", [bot.botId, controlledAt]);
     await touch(bot);
-    return c.json({ computer: view(computer, { ...bot, customerInControl: inControl }) });
+    return c.json({ computer: view(computer, { ...bot, controlledAt }) });
   }));
 
   // A link to watch the Computer live, good for a minute; the browser opens it as a WebSocket.
@@ -186,21 +202,7 @@ export function computerSizes(deps: AppDeps) {
   };
 }
 
-/** What the browser sees of a Computer. */
-function view(computer: ComputerView, bot: BotComputer) {
-  return {
-    state: computer.state,
-    size: computer.size,
-    sleepAfterMinutes: bot.sleepAfterMinutes,
-    customerInControl: bot.customerInControl,
-  };
-}
 
-/** The Customer's live view closed: the Bot may use its Computer again. */
-export async function handBack(deps: AppDeps, botId: string): Promise<void> {
-  if (!UUID_PATTERN.test(botId)) return;
-  await deps.db.query("UPDATE bots SET computer_controlled_at = NULL WHERE id = $1", [botId]);
-}
 
 function sizeOf(raw: unknown): ComputerSize | null {
   return COMPUTER_SIZES.find((size) => size.size === raw)?.size ?? null;
@@ -214,7 +216,7 @@ async function botComputer(db: Db, customerId: string, botId: string): Promise<B
   if (!UUID_PATTERN.test(botId)) return null;
   const { rows } = await db.query<BotComputer>(
     `SELECT id AS "botId", name AS "botName", computer_id AS "computerId", computer_sleep_after_minutes AS "sleepAfterMinutes",
-       computer_controlled_at IS NOT NULL AS "customerInControl"
+       computer_controlled_at AS "controlledAt"
      FROM bots WHERE id = $1 AND customer_id = $2`,
     [botId, customerId],
   );

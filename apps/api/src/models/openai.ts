@@ -172,7 +172,17 @@ function toInput(item: ConversationItem): ResponseInputItem[] {
   switch (item.role) {
     case "user":
     case "assistant":
-      return [{ role: item.role, content: item.content }];
+      return [
+        item.screenshot
+          ? ({
+              role: item.role,
+              content: [
+                { type: "input_text", text: item.content },
+                { type: "input_image", image_url: `data:image/png;base64,${item.screenshot}`, detail: "auto" },
+              ],
+            } as ResponseInputItem)
+          : { role: item.role, content: item.content },
+      ];
     case "turn":
       return item.raw as ResponseInputItem[];
     case "tool_results":
