@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type RFB from "@novnc/novnc";
-import { api, type Bot, type Computer, type ComputerSize, errorMessage } from "./api.ts";
+import { api, type Bot, type Computer, type ComputerSize, errorMessage, type ModelCatalog } from "./api.ts";
+
+/** Driver models come only from the Model providers with a computer-use tool. */
+const DRIVER_PROVIDERS = new Set(["openai", "anthropic", "google"]);
 
 /** The idle times a Customer can pick before their Computer goes Asleep. */
 const SLEEP_CHOICES = [
@@ -20,12 +23,16 @@ const STATE_LABELS: Record<Computer["state"], string> = {
 /** A Bot's Computer: create, start, shut down or delete it, and watch it live or take over. */
 export function ComputerPanel({
   bot,
+  catalog,
   computer,
   onChange,
+  onBotChange,
 }: {
   bot: Bot;
+  catalog: ModelCatalog;
   computer: Computer | null;
   onChange: (computer: Computer | null) => void;
+  onBotChange: (bot: Bot) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [watching, setWatching] = useState(false);
@@ -56,6 +63,15 @@ export function ComputerPanel({
   const create = () => act(async () => (await api.createComputer(bot.id, size)).computer);
   const resize = (next: string) => act(async () => (await api.resizeComputer(bot.id, next)).computer);
   const setSleep = (minutes: number) => act(async () => (await api.setComputerSleep(bot.id, minutes)).computer);
+  const drivers = catalog.models.filter((model) => DRIVER_PROVIDERS.has(model.provider) && model.available);
+  async function setDriver(driverModel: string) {
+    setError(null);
+    try {
+      onBotChange((await api.setDriverModel(bot.id, driverModel || null)).bot);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
   const sizeLabel = (name: string) => {
     const spec = sizes.find((candidate) => candidate.size === name);
     return spec ? `${spec.name}: ${spec.vcpus} CPUs, ${spec.memoryGb} GB` : name;
@@ -149,6 +165,21 @@ export function ComputerPanel({
             ))}
         </div>
       </div>
+      {computer && (
+        <div className="computer-driver">
+          <label htmlFor="driver-model" className="muted small">
+            {bot.name} uses it with
+          </label>
+          <select id="driver-model" value={bot.driverModel ?? ""} onChange={(event) => void setDriver(event.target.value)}>
+            <option value="">No Driver model: {bot.name} can't use it yet</option>
+            {drivers.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       {watching && computer?.state === "running" && <LiveView botId={bot.id} />}
       {error && (
         <p className="alert" role="alert">
@@ -203,12 +234,20 @@ function Screen({ botId, onReconnect }: { botId: string; onReconnect: () => void
     };
   }, [botId]);
 
-  function toggleControl() {
+  // Taking control tells the Bot to wait; handing back lets it carry on.
+  async function toggleControl() {
     const rfb = viewer.current;
     if (!rfb) return;
-    rfb.viewOnly = inControl;
-    if (!inControl) rfb.focus();
-    setInControl(!inControl);
+    const taking = !inControl;
+    try {
+      await api.setComputerControl(botId, taking);
+    } catch (caught) {
+      setError(errorMessage(caught));
+      return;
+    }
+    rfb.viewOnly = !taking;
+    if (taking) rfb.focus();
+    setInControl(taking);
   }
 
   return (
@@ -216,11 +255,12 @@ function Screen({ botId, onReconnect }: { botId: string; onReconnect: () => void
       <div className="live-view-bar">
         <span className="muted small">
           {status === "connecting" && "Connecting…"}
-          {status === "connected" && (inControl ? "You're in control of the mouse and keyboard." : "Watching live.")}
+          {status === "connected" &&
+            (inControl ? "You have the mouse and keyboard; the Bot waits until you hand back." : "Watching live.")}
           {status === "disconnected" && (error ?? "The live view closed.")}
         </span>
         {status === "connected" && (
-          <button type="button" className="button secondary small" onClick={toggleControl}>
+          <button type="button" className="button secondary small" onClick={() => void toggleControl()}>
             {inControl ? "Hand back" : "Take over"}
           </button>
         )}

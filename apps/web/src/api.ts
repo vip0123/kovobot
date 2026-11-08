@@ -9,6 +9,8 @@ export interface Bot {
   id: string;
   name: string;
   model: string;
+  /** The model the Bot operates its Computer with: OpenAI, Anthropic or Google; null until picked. */
+  driverModel: string | null;
   createdAt: string;
 }
 
@@ -40,6 +42,8 @@ export interface Computer {
   size: string;
   /** It goes Asleep after this long with no viewer or Bot at work: 15 minutes to 4 hours. */
   sleepAfterMinutes: number;
+  /** Whether the Customer has the mouse and keyboard; the Bot waits meanwhile. */
+  customerInControl: boolean;
 }
 
 /** A Computer size this install can give: its CPUs and memory. */
@@ -109,6 +113,8 @@ export const api = {
   createBot: (name: string, model: string) => request<{ bot: Bot }>("/bots", { method: "POST", json: { name, model } }),
   renameBot: (id: string, name: string) => request<{ bot: Bot }>(`/bots/${id}`, { method: "PATCH", json: { name } }),
   switchModel: (id: string, model: string) => request<{ bot: Bot }>(`/bots/${id}`, { method: "PATCH", json: { model } }),
+  setDriverModel: (id: string, driverModel: string | null) =>
+    request<{ bot: Bot }>(`/bots/${id}`, { method: "PATCH", json: { driverModel } }),
   deleteBot: (id: string) => request<unknown>(`/bots/${id}`, { method: "DELETE" }),
   messages: (botId: string) => request<{ messages: Message[] }>(`/bots/${botId}/messages`),
 
@@ -118,6 +124,9 @@ export const api = {
     request<{ computer: Computer }>(`/bots/${botId}/computer`, { method: "POST", json: { size } }),
   resizeComputer: (botId: string, size: string) =>
     request<{ computer: Computer }>(`/bots/${botId}/computer`, { method: "PATCH", json: { size } }),
+  /** The Customer takes the mouse and keyboard (true) or hands them back; the Bot waits meanwhile. */
+  setComputerControl: (botId: string, inControl: boolean) =>
+    request<{ computer: Computer }>(`/bots/${botId}/computer/control`, { method: "POST", json: { inControl } }),
   setComputerSleep: (botId: string, sleepAfterMinutes: number) =>
     request<{ computer: Computer }>(`/bots/${botId}/computer`, { method: "PATCH", json: { sleepAfterMinutes } }),
   startComputer: (botId: string) => request<{ computer: Computer }>(`/bots/${botId}/computer/start`, { method: "POST" }),
@@ -129,9 +138,15 @@ export const api = {
 
   /**
    * Sends a message on the web Channel and streams the Bot's reply: `onText`
-   * gets each piece as the model writes it. Resolves with the saved reply.
+   * gets each piece as the model writes it, and `onStatus` what the Bot is doing,
+   * such as using its Computer. Resolves with the saved reply.
    */
-  async sendMessage(botId: string, content: string, onText: (text: string) => void): Promise<Message> {
+  async sendMessage(
+    botId: string,
+    content: string,
+    onText: (text: string) => void,
+    onStatus: (status: string) => void = () => {},
+  ): Promise<Message> {
     const response = await send(`/bots/${botId}/messages`, { method: "POST", json: { content } });
     const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
     let buffer = "";
@@ -144,6 +159,7 @@ export const api = {
         const event = parseServerSentEvent(buffer.slice(0, end));
         buffer = buffer.slice(end + 2);
         if (event.name === "delta") onText((event.data as { text: string }).text);
+        if (event.name === "status") onStatus((event.data as { text: string }).text);
         if (event.name === "done") return (event.data as { message: Message }).message;
         if (event.name === "error") {
           const error = event.data as { code: string; message: string };

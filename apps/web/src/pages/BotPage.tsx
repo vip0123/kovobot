@@ -52,7 +52,9 @@ function BotChat() {
   return (
     <main className="page chat-page">
       <BotHeader bot={bot} catalog={catalog} hasComputer={Boolean(computer && computer !== "off")} onChange={setBot} />
-      {computer !== undefined && computer !== "off" && <ComputerPanel bot={bot} computer={computer} onChange={setComputer} />}
+      {computer !== undefined && computer !== "off" && (
+        <ComputerPanel bot={bot} catalog={catalog} computer={computer} onChange={setComputer} onBotChange={setBot} />
+      )}
       <Conversation bot={bot} messages={messages} onMessages={setMessages} />
     </main>
   );
@@ -191,6 +193,7 @@ function Conversation({
 }) {
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const end = useRef<HTMLDivElement>(null);
 
@@ -207,12 +210,18 @@ function Conversation({
     onMessages((current) => [...current, { id: `pending-${Date.now()}`, role: "user", content, createdAt: new Date().toISOString() }]);
     setStreaming("");
     try {
-      const reply = await api.sendMessage(bot.id, content, (text) => setStreaming((sofar) => (sofar ?? "") + text));
+      const reply = await api.sendMessage(
+        bot.id,
+        content,
+        (text) => setStreaming((sofar) => (sofar ?? "") + text),
+        (text) => setStatus(text),
+      );
       onMessages((current) => [...current, reply]);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
       setStreaming(null);
+      setStatus(null);
     }
   }
 
@@ -237,6 +246,7 @@ function Conversation({
         {streaming !== null && (
           <div className="bubble assistant" aria-busy="true">
             {streaming || <span className="muted">Thinking…</span>}
+            {status && <div className="muted small bot-status">{status}</div>}
           </div>
         )}
         {error && (
