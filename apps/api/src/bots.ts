@@ -4,6 +4,7 @@ import type { Db } from "@kovobot/db";
 import { runTask } from "./agent.ts";
 import type { AppDeps } from "./app.ts";
 import { sessionCustomer } from "./auth/sessions.ts";
+import { computerRoutes, deleteBotComputer } from "./computer-routes.ts";
 import type { Customer } from "./customers.ts";
 import { apiError, jsonBody } from "./http.ts";
 import type { ModelAdapters } from "./models/adapter.ts";
@@ -82,9 +83,14 @@ export function botRoutes(deps: AppDeps) {
   });
 
   routes.delete("/bots/:id", async (c) => {
+    if (!(await deleteBotComputer(deps, c.get("customer").id, c.req.param("id")))) {
+      return apiError(c, 503, "computer_service_unavailable", "The Bot's Computer can't be deleted right now. Try again in a moment.");
+    }
     const deleted = await deleteBot(deps.db, c.get("customer").id, c.req.param("id"));
     return deleted ? c.body(null, 204) : botNotFound(c);
   });
+
+  routes.route("/bots/:id/computer", computerRoutes(deps));
 
   routes.get("/bots/:id/messages", async (c) => {
     const bot = await findBot(deps.db, c.get("customer").id, c.req.param("id"));

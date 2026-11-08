@@ -44,6 +44,16 @@ export interface Config {
   localModelsUrl: string | null;
   /** The Anthropic workspace to call in, for an Anthropic key that isn't scoped to one. Null for one that is. */
   anthropicWorkspaceId: string | null;
+  /** Where the Bot service calls the Computer service. Null leaves Computers off. */
+  computerService: ComputerServiceSettings | null;
+}
+
+/** How the Bot service reaches the Computer service, its only client (ADR 0001). */
+export interface ComputerServiceSettings {
+  /** Origin of the Computer service, as the Bot service reaches it. */
+  url: string;
+  /** The shared secret the Bot service presents on every call. */
+  apiKey: string;
 }
 
 export interface ModelKeys {
@@ -65,12 +75,16 @@ export class ConfigError extends Error {
   }
 }
 
+/** Where the Computer service listens unless COMPUTER_SERVICE_URL says otherwise. */
+export const COMPUTER_SERVICE_DEFAULT_URL = "http://localhost:3100";
+
 const SELF_HOSTED_DEFAULTS = {
   DATABASE_URL: "postgres://kovobot:kovobot@localhost:54329/kovobot",
   EMAIL_FROM: "Kovobot <noreply@localhost>",
 };
 
-const MIN_SESSION_SECRET_LENGTH = 32;
+/** The shortest secret accepted for signing or sharing: openssl rand -base64 32 gives 44 characters. */
+const MIN_SECRET_LENGTH = 32;
 
 /**
  * Reads the environment into settings. A hosted install must set every secret
@@ -168,8 +182,8 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
     if (hosted) problems.push("SESSION_SECRET is required when hosted.");
     else warnings.push("SESSION_SECRET is not set: using a temporary one, so everyone is signed out on restart.");
     sessionSecret = randomBytes(32).toString("base64url");
-  } else if (sessionSecret.length < MIN_SESSION_SECRET_LENGTH) {
-    problems.push(`SESSION_SECRET must be at least ${MIN_SESSION_SECRET_LENGTH} characters (openssl rand -base64 32).`);
+  } else if (sessionSecret.length < MIN_SECRET_LENGTH) {
+    problems.push(`SESSION_SECRET must be at least ${MIN_SECRET_LENGTH} characters (openssl rand -base64 32).`);
   }
 
   const emailFrom = required("EMAIL_FROM");
@@ -232,6 +246,7 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
     },
     localModelsUrl: null,
     anthropicWorkspaceId: read("ANTHROPIC_WORKSPACE_ID") ?? null,
+    computerService: null,
   };
   if (config.anthropicWorkspaceId && !/^wrkspc_\w+$/.test(config.anthropicWorkspaceId)) {
     warnings.push("ANTHROPIC_WORKSPACE_ID doesn't look like a workspace id (wrkspc_...): Anthropic will refuse every call.");
@@ -244,6 +259,13 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
   } else if (localModelsUrl) {
     config.localModelsUrl = localModelsUrl.replace(/\/$/, "");
   }
+  const computerServiceKey = read("COMPUTER_SERVICE_API_KEY");
+  if (computerServiceKey && computerServiceKey.length < MIN_SECRET_LENGTH) {
+    problems.push(`COMPUTER_SERVICE_API_KEY must be at least ${MIN_SECRET_LENGTH} characters (openssl rand -base64 32).`);
+  } else if (computerServiceKey) {
+    const url = optionalOrigin("COMPUTER_SERVICE_URL") ?? COMPUTER_SERVICE_DEFAULT_URL;
+    config.computerService = { url, apiKey: computerServiceKey };
+  }
   if (Object.values(config.modelKeys).every((key) => key === null) && !config.localModelsUrl) {
     warnings.push(
       "No Model provider key is set (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, XAI_API_KEY or OPENROUTER_API_KEY): Bots can't reply.",
@@ -252,4 +274,73 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
 
   if (problems.length > 0) throw new ConfigError(problems);
   return { config, warnings };
+}
+
+export interface ComputerServiceConfig {
+  /** The key the Bot service, its only client, presents on every call. */
+  apiKey: string;
+  port: number;
+  /** Signs live-view links; random per start when unset, since each link lasts only a minute. */
+  tokenSigningKey: string;
+  /** Where Computers run. Docker is the only backend so far, Linux only. */
+  backend: "docker";
+  docker: {
+    /** The Docker engine's address, e.g. unix:///var/run/docker.sock. Null uses the local default. */
+    host: string | null;
+    /** The image each Computer starts from. */
+    image: string;
+    /**
+     * A Docker network the Computer service shares with its Computers, when it runs in a
+     * container itself. Null publishes each Computer agent on 127.0.0.1 instead.
+     */
+    network: string | null;
+  };
+}
+
+/** Reads the Computer service's environment (ADR 0001). Throws ConfigError listing every problem. */
+export function loadComputerServiceConfig(env: Env): ComputerServiceConfig {
+  const problems: string[] = [];
+  const read = (name: string): string | undefined => env[name]?.trim() || undefined;
+
+  const secret = (name: string, missing: string | null): string | undefined => {
+    const value = read(name);
+    if (!value) {
+      if (missing) problems.push(missing);
+    } else if (value.length < MIN_SECRET_LENGTH) {
+      problems.push(`${name} must be at least ${MIN_SECRET_LENGTH} characters (openssl rand -base64 32).`);
+    }
+    return value;
+  };
+  const apiKey = secret(
+    "COMPUTER_SERVICE_API_KEY",
+    "COMPUTER_SERVICE_API_KEY is required: the Bot service presents it on every call (openssl rand -base64 32).",
+  );
+  const tokenSigningKey = secret("COMPUTER_TOKEN_SIGNING_KEY", null) ?? randomBytes(32).toString("base64url");
+
+  let port = 3100;
+  const rawUrl = read("COMPUTER_SERVICE_URL") ?? COMPUTER_SERVICE_DEFAULT_URL;
+  try {
+    const url = new URL(rawUrl);
+    port = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
+  } catch {
+    problems.push(`COMPUTER_SERVICE_URL must be a URL, not "${rawUrl}".`);
+  }
+
+  const backend = read("COMPUTER_BACKEND") ?? "docker";
+  if (backend !== "docker") {
+    problems.push(`COMPUTER_BACKEND must be "docker", not "${backend}": other backends aren't built yet.`);
+  }
+
+  if (problems.length > 0) throw new ConfigError(problems);
+  return {
+    apiKey: apiKey!,
+    port,
+    tokenSigningKey,
+    backend: "docker",
+    docker: {
+      host: read("DOCKER_HOST") ?? null,
+      image: read("COMPUTER_IMAGE") ?? "kovobot-computer",
+      network: read("COMPUTER_DOCKER_NETWORK") ?? null,
+    },
+  };
 }

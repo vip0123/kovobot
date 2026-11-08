@@ -14,10 +14,12 @@
     "hono": "^4.13.14",
     "nodemailer": "^10.3.1",
     "openai": "^7.45.1",
-    "pg": "^8.23.1"
+    "pg": "^8.23.1",
+    "ws": "^8.22.1"
   },
   "devDependencies": {
     "@types/nodemailer": "^8.0.2",
-    "@types/pg": "^8.23.1"
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.2"
   }
 }

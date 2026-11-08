@@ -418,3 +418,55 @@ textarea:focus-visible {
 .composer .button {
   margin-top: 0;
 }
+
+/* A Bot's Computer, between its header and its conversation. */
+.computer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.computer-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.computer-head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.computer-head .actions {
+  margin-left: auto;
+}
+
+.live-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.live-view-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* The Computer's 1280×800 screen, scaled to fit. */
+.live-view-screen {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  background: #111111;
+  border-radius: 8px;
+  overflow: hidden;
+  outline: 2px solid transparent;
+}
+
+.live-view-screen.in-control {
+  outline-color: var(--danger);
+}

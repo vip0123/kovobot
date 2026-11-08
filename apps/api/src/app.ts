@@ -5,6 +5,7 @@ import type { Config } from "@kovobot/config";
 import type { Db } from "@kovobot/db";
 import { authRoutes } from "./auth/routes.ts";
 import { botRoutes } from "./bots.ts";
+import type { ComputerService } from "./computers.ts";
 import { apiError, sameOriginWrites } from "./http.ts";
 import { leadRoutes } from "./leads.ts";
 import type { Mailer } from "./mailer.ts";
@@ -19,6 +20,8 @@ export interface AppDeps {
   fetch: typeof fetch;
   /** One adapter per Model provider; null where no key is set. */
   models: ModelAdapters;
+  /** The Computer service; null leaves Computers off. */
+  computers: ComputerService | null;
   now: () => Date;
 }
 

@@ -11,7 +11,8 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       strictPort: true,
-      proxy: { "/api": env.API_URL || "http://localhost:3000" },
+      // ws: a Computer's live view comes in as a WebSocket under /api.
+      proxy: { "/api": { target: env.API_URL || "http://localhost:3000", ws: true } },
     },
   };
 });
