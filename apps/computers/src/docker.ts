@@ -1,14 +1,16 @@
 import Docker from "dockerode";
 import type { ComputerServiceConfig } from "@kovobot/config";
+import { COMPUTER_SIZES } from "@kovobot/plans";
 import { AGENT_PORT, type BackendComputer, type ComputerBackend, type ComputerState } from "./backend.ts";
 
 const AGENT_PORT_KEY = `${AGENT_PORT}/tcp`;
 const GIB = 1024 ** 3;
+/** Every local Computer gets the Small size until Computers have sizes to pick (tickets 25, 26). */
+const SIZE = COMPUTER_SIZES.find((size) => size.size === "small")!;
 
 /**
  * Computers as local Docker containers, one each, with a volume for the home directory.
- * Docker is the only record: labels name each Computer and its owner. A Small Computer's
- * share: 2 CPUs and 4 GB of memory.
+ * Docker is the only record: labels name each Computer and its owner.
  */
 export function createDockerBackend(settings: ComputerServiceConfig["docker"]): ComputerBackend {
   const docker = new Docker(connection(settings.host));
@@ -36,8 +38,8 @@ export function createDockerBackend(settings: ComputerServiceConfig["docker"]): 
           ...(settings.network
             ? { NetworkMode: settings.network }
             : { PortBindings: { [AGENT_PORT_KEY]: [{ HostIp: "127.0.0.1", HostPort: "" }] } }),
-          NanoCpus: 2e9,
-          Memory: 4 * GIB,
+          NanoCpus: SIZE.vcpus * 1e9,
+          Memory: SIZE.memoryGb * GIB,
           ShmSize: GIB / 2,
           SecurityOpt: ["no-new-privileges"],
           // For the Computer's own firewall, which its start-up sets as root before the desktop runs.
@@ -51,7 +53,9 @@ export function createDockerBackend(settings: ComputerServiceConfig["docker"]): 
     find,
 
     async start(id) {
-      await container(id).start().catch(ignoreStatus(304));
+      const info = await container(id).inspect();
+      if (info.State.Paused) await container(id).unpause();
+      else await container(id).start().catch(ignoreStatus(304));
     },
 
     async shutDown(id) {

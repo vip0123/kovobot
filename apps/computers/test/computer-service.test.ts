@@ -107,6 +107,16 @@ describe("the Computer service", { timeout: 60_000 }, () => {
     expect(await gone.json()).toMatchObject({ error: { code: "computer_not_found" } });
   });
 
+  test("a Computer that is Asleep starts again", async () => {
+    const computer = await createComputer();
+    await promisify(execFile)("docker", ["pause", `kovobot-computer-${computer.id}`]);
+    expect(await (await call(`/v1/computers/${computer.id}`)).json()).toMatchObject({ computer: { state: "asleep" } });
+
+    const started = await call(`/v1/computers/${computer.id}/start`, { method: "POST" });
+    expect(started.status).toBe(200);
+    expect(await started.json()).toMatchObject({ computer: { state: "running" } });
+  });
+
   test("a Computer needs an owner", async () => {
     const response = await call("/v1/computers", { method: "POST", json: {} });
     expect(response.status).toBe(400);

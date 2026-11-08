@@ -103,6 +103,22 @@ describe("a Bot's Computer", () => {
     expect((await browser.post(`/api/bots/${bot.id}/computer`)).status).toBe(201);
   });
 
+  test("isn't forgotten when the Computer service answers from the wrong address", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    await browser.post(`/api/bots/${bot.id}/computer`);
+
+    server.computerService.misrouted = true;
+    try {
+      const response = await browser.get(`/api/bots/${bot.id}/computer`);
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ error: { code: "computer_service_unavailable" } });
+    } finally {
+      server.computerService.misrouted = false;
+    }
+    expect(await computerOf(browser, bot)).toEqual({ state: "running" });
+  });
+
   test("is unavailable where no Computer service is set up", async () => {
     const browser = await signedInBrowser(withoutComputers);
     const bot = await createBot(browser);

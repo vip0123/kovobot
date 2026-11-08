@@ -8,6 +8,7 @@
   "dependencies": {
     "@hono/node-server": "^2.1.5",
     "@kovobot/config": "workspace:*",
+    "@kovobot/plans": "workspace:*",
     "dockerode": "^5.0.1",
     "hono": "^4.13.14",
     "ws": "^8.22.1"

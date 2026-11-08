@@ -1,7 +1,10 @@
 import type { Context, MiddlewareHandler } from "hono";
 
 /** Every API error has this shape: a stable machine-readable code and a sentence for people. */
-export function apiError(c: Context, status: 400 | 401 | 403 | 404 | 409 | 503, code: string, message: string) {
+/** The shape of every id the API hands out. */
+export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function apiError(c: Context, status: 400 | 401 | 403 | 404 | 409 | 426 | 503, code: string, message: string) {
   return c.json({ error: { code, message } }, status);
 }
 

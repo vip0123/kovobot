@@ -25,6 +25,9 @@ export class FakeComputerService {
   private server: Server | undefined;
   private readonly webSockets = new WebSocketServer({ noServer: true });
 
+  /** While true, every request answers a plain 404, as a wrong address or a proxy in the way would. */
+  misrouted = false;
+
   /** The Computer service loses this Computer, as if it had been deleted behind the Bot service's back. */
   forget(id: string): void {
     this.computers.delete(id);
@@ -62,6 +65,7 @@ export class FakeComputerService {
       response.writeHead(status, { "content-type": "application/json" });
       response.end(json === undefined ? undefined : JSON.stringify(json));
     };
+    if (this.misrouted) return send(404, { error: { code: "not_found", message: "There is no such route." } });
     if (request.headers.authorization !== `Bearer ${this.apiKey}`) {
       return send(401, { error: { code: "unauthorized", message: "Present the Computer service's key." } });
     }

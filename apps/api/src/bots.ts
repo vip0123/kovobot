@@ -6,7 +6,7 @@ import type { AppDeps } from "./app.ts";
 import { sessionCustomer } from "./auth/sessions.ts";
 import { computerRoutes, deleteBotComputer } from "./computer-routes.ts";
 import type { Customer } from "./customers.ts";
-import { apiError, jsonBody } from "./http.ts";
+import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
 import type { ModelAdapters } from "./models/adapter.ts";
 import { describeModel, MODELS, type ModelInfo } from "./models/catalog.ts";
 
@@ -34,7 +34,6 @@ const MESSAGES_SENT_TO_MODEL = 50;
  * the same, so Model providers read it back from their prompt cache.
  */
 const WINDOW_STEP = 20;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Bots, and chatting with them on the web Channel. Every route needs a signed-in Customer. */
 export function botRoutes(deps: AppDeps) {

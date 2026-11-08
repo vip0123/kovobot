@@ -50,16 +50,20 @@ const NOT_FOUND = () => new ComputerServiceError(404, "computer_not_found", "The
 export function createComputerServiceClient(settings: ComputerServiceSettings): ComputerService {
   const authorization = `Bearer ${settings.apiKey}`;
 
-  /** The answer's JSON; null for a Computer the service doesn't have. Any other refusal throws. */
+  /**
+   * The answer's JSON; null when the Computer service says it has no such Computer. Any
+   * other refusal throws, including a 404 from a wrong address, so a Bot never forgets a
+   * Computer that still runs.
+   */
   async function call<T>(method: string, path: string, json?: unknown): Promise<T | null> {
     const response = await fetch(`${settings.url}/v1${path}`, {
       method,
       headers: { authorization, ...(json === undefined ? {} : { "content-type": "application/json" }) },
       body: json === undefined ? undefined : JSON.stringify(json),
     });
-    if (response.status === 404) return null;
     if (response.status === 204) return {} as T;
     const body = (await response.json().catch(() => ({}))) as { error?: { code?: string; message?: string } };
+    if (response.status === 404 && body.error?.code === "computer_not_found") return null;
     if (!response.ok) {
       throw new ComputerServiceError(response.status, body.error?.code ?? "unknown", body.error?.message ?? "The Computer service refused.");
     }

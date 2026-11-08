@@ -28,9 +28,9 @@ Run one file with `pnpm test apps/api/test/bots.test.ts`, or tests by name with 
 
 ## How we write code
 
-- **Tests first, at the public seams:** the config loader, the HTTP API (against a real database), and each Model provider adapter (against a local fake of its API). Fake only what lies outside our code: email, Google sign-in, the clock and Model providers.
+- **Tests first, at the public seams:** the config loaders, the HTTP API (against a real database), each Model provider adapter (against a local fake of its API), and the Computer service's API (against real Docker). Fake only what lies outside the code under test: email, Google sign-in, the clock, Model providers, and the Computer service when testing the Bot service.
 - **One vocabulary.** Use the terms in [GLOSSARY.md](GLOSSARY.md) in code, docs and UI copy, and avoid the synonyms it lists: a *Customer*, never a "user"; a *Bot*, never an "agent".
-- **Settings come only from `loadConfig`** in `packages/config`; add a test and a line in `.env.example` for each new one.
+- **Settings come only from `loadConfig`** in `packages/config` (the Computer service's from `loadComputerServiceConfig`, and the Computer agent's from the Computer service when it creates the Computer); add a test and a line in `.env.example` for each new one.
 - **Migrations only add.** Each runs while the previous release still serves, so it must work with that release's code. Never edit one that has shipped.
 - **Prices and Plan limits come from `@kovobot/plans`**, never from hand-typed copy.
 - **Written from scratch.** Don't copy code, prompts, tests or UI text from other projects.

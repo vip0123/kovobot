@@ -212,6 +212,12 @@ describe("Computers", () => {
     ).toEqual({ url: "http://computers:3100", apiKey: key });
   });
 
+  test("are for self-hosted installs only, until hosted Computers run in the cloud and are billed", () => {
+    expect(configProblems({ ...hostedEnv, COMPUTER_SERVICE_API_KEY: key })).toEqual([
+      expect.stringMatching(/^COMPUTER_SERVICE_API_KEY is for self-hosted installs only/),
+    ]);
+  });
+
   test("a short Computer service key or a malformed address is refused", () => {
     expect(configProblems({ COMPUTER_SERVICE_API_KEY: "short" })).toEqual([
       expect.stringMatching(/^COMPUTER_SERVICE_API_KEY must be at least 32 characters/),

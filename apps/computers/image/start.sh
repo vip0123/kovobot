@@ -28,6 +28,7 @@ fi
 
 Xvfb :1 -screen 0 1280x800x24 -nolisten tcp -ac &
 for _ in $(seq 1 50); do [ -e /tmp/.X11-unix/X1 ] && break; sleep 0.1; done
-runuser -u kovobot -- env DISPLAY=:1 HOME=/home/kovobot dbus-launch --exit-with-session startxfce4 >/dev/null 2>&1 &
+# The desktop starts with a clean environment, so it never sees the agent's token.
+runuser -u kovobot -- env -i DISPLAY=:1 HOME=/home/kovobot USER=kovobot SHELL=/bin/bash LANG=C.UTF-8 PATH=/usr/local/bin:/usr/bin:/bin dbus-launch --exit-with-session startxfce4 >/dev/null 2>&1 &
 x11vnc -display :1 -localhost -rfbport 5900 -forever -shared -nopw -quiet >/dev/null 2>&1 &
 exec node /opt/kovobot/agent.ts

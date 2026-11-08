@@ -260,7 +260,11 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
     config.localModelsUrl = localModelsUrl.replace(/\/$/, "");
   }
   const computerServiceKey = read("COMPUTER_SERVICE_API_KEY");
-  if (computerServiceKey && computerServiceKey.length < MIN_SECRET_LENGTH) {
+  if (computerServiceKey && hosted) {
+    problems.push(
+      "COMPUTER_SERVICE_API_KEY is for self-hosted installs only: hosted Computers run in the cloud and are billed, which isn't built yet.",
+    );
+  } else if (computerServiceKey && computerServiceKey.length < MIN_SECRET_LENGTH) {
     problems.push(`COMPUTER_SERVICE_API_KEY must be at least ${MIN_SECRET_LENGTH} characters (openssl rand -base64 32).`);
   } else if (computerServiceKey) {
     const url = optionalOrigin("COMPUTER_SERVICE_URL") ?? COMPUTER_SERVICE_DEFAULT_URL;

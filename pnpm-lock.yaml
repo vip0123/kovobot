@@ -84,6 +84,9 @@ importers:
       '@kovobot/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@kovobot/plans':
+        specifier: workspace:*
+        version: link:../../packages/plans
       dockerode:
         specifier: ^5.0.1
         version: 5.0.1

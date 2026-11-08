@@ -8,8 +8,10 @@ import { createServer } from "node:http";
 import { connect } from "node:net";
 
 const token = process.env.KOVOBOT_AGENT_TOKEN ?? "";
-const port = Number(process.env.KOVOBOT_AGENT_PORT ?? 4000);
-const vncPort = Number(process.env.KOVOBOT_VNC_PORT ?? 5900);
+/** Where the Computer service reaches the agent (AGENT_PORT in src/backend.ts). */
+const port = 4000;
+/** Where start.sh starts the VNC server, inside the Computer only. */
+const vncPort = 5900;
 if (token.length < 32) {
   console.error("KOVOBOT_AGENT_TOKEN must be set by the Computer service (at least 32 characters).");
   process.exit(1);

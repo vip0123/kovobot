@@ -3,9 +3,7 @@ import type { Db } from "@kovobot/db";
 import type { AppDeps } from "./app.ts";
 import { type ComputerService, ComputerServiceError, type ComputerView } from "./computers.ts";
 import type { Customer } from "./customers.ts";
-import { apiError } from "./http.ts";
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { apiError, UUID_PATTERN } from "./http.ts";
 
 interface BotComputer {
   botId: string;
@@ -92,7 +90,7 @@ export function computerRoutes(deps: AppDeps) {
   // that the page is ours, before the live view is relayed. The Computer service checks the token.
   routes.get("/live", forComputer(async (c, computer) => {
     if (c.req.header("upgrade")?.toLowerCase() !== "websocket") {
-      return c.json({ error: { code: "upgrade_required", message: "Open the live view as a WebSocket." } }, 426);
+      return apiError(c, 426, "upgrade_required", "Open the live view as a WebSocket.");
     }
     if (c.req.header("origin") !== deps.config.appUrl) return apiError(c, 403, "cross_site", "This request came from another website.");
     return c.json({ computerId: computer.id, token: c.req.query("token") ?? "" });
