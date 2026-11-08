@@ -95,7 +95,7 @@ Keep `SIGN_UP_OPEN=false` on a server. Otherwise anyone who finds your address c
 
 ## Computers
 
-A Computer is a Linux desktop with Firefox that one Bot has. You watch it live from the Bot's page, and you can take over the mouse and keyboard at any time. Bots driving their Computers themselves comes next.
+A Computer is a Linux desktop with Firefox that one Bot has. The Bot uses it through its Driver model, an OpenAI, Anthropic or Google model you pick on the Bot's page; ask it to do something that needs a browser and it hands the task to the Driver model, which works on the screen and reports back. You watch it live from the Bot's page and can take over the mouse and keyboard at any time: the Bot waits until you hand back. It is told to stop and ask before paying, sending or deleting, on a best-effort basis.
 
 1. Add a key to `.env`, so the Bot service and the Computer service trust each other:
 
@@ -111,7 +111,7 @@ A Computer is a Linux desktop with Firefox that one Bot has. You watch it live f
    ```
 
    The first start builds the desktop image, about 1.4 GB, which takes a few minutes.
-3. Open a Bot, choose **Create a Computer**, then **Watch live**.
+3. Open a Bot, choose **Create a Computer**, pick the model it uses the Computer with, then **Watch live**.
 
 - **Each Computer is a container on this machine,** at the size you pick when you create it: Small, Medium, Large or XL. Only the sizes this machine's Docker can give are offered, and you can change a Computer's size while it runs.
 - **Asleep and Shut down.** A Computer with no one watching and no Bot at work goes Asleep after 15 minutes; you can pick up to 4 hours on the Bot's page. Asleep keeps its memory and uses no CPU, and Start wakes it. After 30 days Asleep it is Shut down, which keeps its files. Deleting it, or its Bot, deletes them.
