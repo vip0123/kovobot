@@ -25,7 +25,7 @@ beforeAll(async () => {
     { cwd: new URL("..", import.meta.url) },
   );
   const config = loadComputerServiceConfig({ COMPUTER_SERVICE_API_KEY: KEY, COMPUTER_IMAGE: STAND_IN_IMAGE });
-  const service = createComputerService({ config, backend: createDockerBackend(config.docker), now: () => clock.now });
+  const service = createComputerService({ config, backend: createDockerBackend(config.docker, config.outbound), now: () => clock.now });
   server = serve({ fetch: service.app.fetch, port: 0, hostname: "127.0.0.1" });
   server.on("upgrade", service.upgrade);
   await new Promise((resolve) => server.once("listening", resolve));
@@ -149,6 +149,41 @@ describe("the Computer service", { timeout: 60_000 }, () => {
       const refused = await call("/v1/computers", { method: "POST", json: { owner: "bot-test", size: tooBig } });
       expect(refused.status).toBe(400);
       expect(await refused.json()).toMatchObject({ error: { code: "size_unavailable" } });
+    }
+  });
+
+  test("the Computer agent carries out actions and takes screenshots", async () => {
+    const computer = await createComputer();
+    const act = (action: object) => call(`/v1/computers/${computer.id}/actions`, { method: "POST", json: action });
+
+    expect((await act({ type: "move", x: 640, y: 400 })).status).toBe(200);
+    expect(await (await act({ type: "cursor_position" })).json()).toEqual({ cursor: { x: 640, y: 400 } });
+    for (const action of [
+      { type: "click", x: 10, y: 20, button: "left", count: 2 },
+      { type: "type", text: "hello, world" },
+      { type: "keys", keys: "ctrl+shift+t" },
+      { type: "scroll", x: 100, y: 100, dx: 0, dy: -3 },
+      { type: "drag", path: [[1, 1], [50, 60]] },
+      { type: "wait", ms: 10 },
+    ]) {
+      expect((await act(action)).status, JSON.stringify(action)).toBe(200);
+    }
+
+    const screenshot = await call(`/v1/computers/${computer.id}/screenshot`);
+    expect(screenshot.headers.get("content-type")).toBe("image/png");
+    expect(Buffer.from(await screenshot.arrayBuffer()).subarray(1, 4).toString()).toBe("PNG");
+  });
+
+  test("an action off the screen or out of the ordinary is refused", async () => {
+    const computer = await createComputer();
+    for (const action of [
+      { type: "click", x: 5000, y: 10, button: "left", count: 1 },
+      { type: "keys", keys: "ctrl+c; echo pwned" },
+      { type: "launch_missiles" },
+    ]) {
+      const response = await call(`/v1/computers/${computer.id}/actions`, { method: "POST", json: action });
+      expect(response.status, JSON.stringify(action)).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: "invalid_action" } });
     }
   });
 

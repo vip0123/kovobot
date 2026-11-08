@@ -106,6 +106,47 @@ export function createComputerService(deps: ComputerServiceDeps) {
     return c.body(null, 204);
   }));
 
+  /**
+   * Calls this Computer's agent, waiting a little for one that is still starting. It retries
+   * only while the agent can't be reached, so an action is never carried out twice.
+   */
+  async function callAgent(computer: BackendComputer, method: "GET" | "POST", path: string, body?: unknown): Promise<Response | null> {
+    const deadline = Date.now() + AGENT_WAIT_MS;
+    while (Date.now() < deadline) {
+      const address = await backend.agentAddress(computer.id);
+      if (!address) return null;
+      try {
+        return await fetch(`http://${address.host}:${address.port}${path}`, {
+          method,
+          headers: { authorization: `Bearer ${computer.agentToken}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+      } catch {
+        await sleep(250);
+      }
+    }
+    return null;
+  }
+
+  const forRunningComputer = (handle: (c: Context, computer: BackendComputer) => Promise<Response>) =>
+    withComputer(async (c, computer) =>
+      computer.state === "running" ? handle(c, computer) : apiError(c, 409, "computer_not_running", "Start the Computer first."),
+    );
+  const unreachable = (c: Context) => apiError(c, 503, "computer_unreachable", "The Computer isn't answering. Try again in a moment.");
+
+  // One action from the common set the Driver models' actions map onto; the agent checks it.
+  app.post("/v1/computers/:id/actions", forRunningComputer(async (c, computer) => {
+    const answer = await callAgent(computer, "POST", "/actions", await jsonObject(c));
+    if (!answer) return unreachable(c);
+    return new Response(answer.body, { status: answer.status, headers: { "content-type": "application/json" } });
+  }));
+
+  app.get("/v1/computers/:id/screenshot", forRunningComputer(async (c, computer) => {
+    const answer = await callAgent(computer, "GET", "/screenshot");
+    if (!answer?.ok) return unreachable(c);
+    return new Response(answer.body, { status: 200, headers: { "content-type": "image/png" } });
+  }));
+
   // A link the Bot service hands to the Customer's browser, good for one Computer and one minute.
   app.post("/v1/computers/:id/live-view", withComputer(async (c, computer) => {
     if (computer.state !== "running") return apiError(c, 409, "computer_not_running", "Start the Computer to watch it.");

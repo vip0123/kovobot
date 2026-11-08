@@ -19,6 +19,12 @@ for range in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/1
   iptables -A OUTPUT -d "$range" -j REJECT
 done
 iptables -A OUTPUT -p tcp --dport 25 -j REJECT
+# Outbound limits, set by the Computer service: new connections a second (a scan or a
+# flood stops there; a burst of five seconds' worth is allowed) and bandwidth.
+per_second="${KOVOBOT_NEW_CONNECTIONS_PER_SECOND:-20}"
+iptables -A OUTPUT -m conntrack --ctstate NEW -m hashlimit --hashlimit-name new-connections --hashlimit-above "${per_second}/second" --hashlimit-burst "$((per_second * 5))" -j REJECT
+outward=$(ip route show default | awk '{ print $5; exit }')
+tc qdisc add dev "$outward" root tbf rate "${KOVOBOT_OUTBOUND_MBIT:-50}mbit" burst 256kb latency 400ms
 if ip6tables -L OUTPUT >/dev/null 2>&1; then
   ip6tables -A OUTPUT -o lo -j ACCEPT
   ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT

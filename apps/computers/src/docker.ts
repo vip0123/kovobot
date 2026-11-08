@@ -22,7 +22,10 @@ function sizeOf(hostConfig: Docker.HostConfig): ComputerSize {
  * Computers as local Docker containers, one each, with a volume for the home directory.
  * Docker is the only record: labels name each Computer and its owner.
  */
-export function createDockerBackend(settings: ComputerServiceConfig["docker"]): ComputerBackend {
+export function createDockerBackend(
+  settings: ComputerServiceConfig["docker"],
+  outbound: ComputerServiceConfig["outbound"],
+): ComputerBackend {
   const docker = new Docker(connection(settings.host));
   const container = (id: string) => docker.getContainer(containerName(id));
 
@@ -44,7 +47,12 @@ export function createDockerBackend(settings: ComputerServiceConfig["docker"]): 
       const created = await docker.createContainer({
         name: containerName(id),
         Image: settings.image,
-        Env: [`KOVOBOT_AGENT_TOKEN=${agentToken}`],
+        Env: [
+          `KOVOBOT_AGENT_TOKEN=${agentToken}`,
+          // Applied by the Computer's start-up, as root, before the desktop runs.
+          `KOVOBOT_OUTBOUND_MBIT=${outbound.mbitPerSecond}`,
+          `KOVOBOT_NEW_CONNECTIONS_PER_SECOND=${outbound.newConnectionsPerSecond}`,
+        ],
         Labels: { "kovobot.computer": id, "kovobot.owner": owner },
         ExposedPorts: { [AGENT_PORT_KEY]: {} },
         HostConfig: {

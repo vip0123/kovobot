@@ -49,6 +49,24 @@ describe("the Computer service's settings", () => {
     });
   });
 
+  test("each Computer's outbound traffic is limited: 50 Mbit/s and 20 new connections a second unless set", () => {
+    expect(loadComputerServiceConfig({ COMPUTER_SERVICE_API_KEY: key }).outbound).toEqual({
+      mbitPerSecond: 50,
+      newConnectionsPerSecond: 20,
+    });
+    expect(
+      loadComputerServiceConfig({
+        COMPUTER_SERVICE_API_KEY: key,
+        COMPUTER_OUTBOUND_MBIT: "10",
+        COMPUTER_NEW_CONNECTIONS_PER_SECOND: "5",
+      }).outbound,
+    ).toEqual({ mbitPerSecond: 10, newConnectionsPerSecond: 5 });
+    expect(problems({ COMPUTER_SERVICE_API_KEY: key, COMPUTER_OUTBOUND_MBIT: "fast", COMPUTER_NEW_CONNECTIONS_PER_SECOND: "0" })).toEqual([
+      'COMPUTER_OUTBOUND_MBIT must be a whole number from 1 to 10000, not "fast".',
+      'COMPUTER_NEW_CONNECTIONS_PER_SECOND must be a whole number from 1 to 10000, not "0".',
+    ]);
+  });
+
   test("only the Docker backend exists so far", () => {
     expect(loadComputerServiceConfig({ COMPUTER_SERVICE_API_KEY: key, COMPUTER_BACKEND: "docker" }).backend).toBe("docker");
     expect(problems({ COMPUTER_SERVICE_API_KEY: key, COMPUTER_BACKEND: "cloud" })).toEqual([

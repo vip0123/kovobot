@@ -288,6 +288,8 @@ export interface ComputerServiceConfig {
   tokenSigningKey: string;
   /** Where Computers run. Docker is the only backend so far, Linux only. */
   backend: "docker";
+  /** What each Computer may send out: its bandwidth, and how many new connections it opens a second. */
+  outbound: { mbitPerSecond: number; newConnectionsPerSecond: number };
   docker: {
     /** The Docker engine's address, e.g. unix:///var/run/docker.sock. Null uses the local default. */
     host: string | null;
@@ -330,6 +332,21 @@ export function loadComputerServiceConfig(env: Env): ComputerServiceConfig {
     problems.push(`COMPUTER_SERVICE_URL must be a URL, not "${rawUrl}".`);
   }
 
+  const wholeNumber = (name: string, fallback: number): number => {
+    const raw = read(name);
+    if (!raw) return fallback;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 1 || value > 10_000) {
+      problems.push(`${name} must be a whole number from 1 to 10000, not "${raw}".`);
+      return fallback;
+    }
+    return value;
+  };
+  const outbound = {
+    mbitPerSecond: wholeNumber("COMPUTER_OUTBOUND_MBIT", 50),
+    newConnectionsPerSecond: wholeNumber("COMPUTER_NEW_CONNECTIONS_PER_SECOND", 20),
+  };
+
   const backend = read("COMPUTER_BACKEND") ?? "docker";
   if (backend !== "docker") {
     problems.push(`COMPUTER_BACKEND must be "docker", not "${backend}": other backends aren't built yet.`);
@@ -341,6 +358,7 @@ export function loadComputerServiceConfig(env: Env): ComputerServiceConfig {
     port,
     tokenSigningKey,
     backend: "docker",
+    outbound,
     docker: {
       host: read("DOCKER_HOST") ?? null,
       image: read("COMPUTER_IMAGE") ?? "kovobot-computer",

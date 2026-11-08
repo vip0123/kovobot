@@ -13,7 +13,7 @@ try {
   process.exit(1);
 }
 
-const service = createComputerService({ config, backend: createDockerBackend(config.docker), now: () => new Date() });
+const service = createComputerService({ config, backend: createDockerBackend(config.docker, config.outbound), now: () => new Date() });
 const server = serve({ fetch: service.app.fetch, port: config.port }, (info) => {
   console.info(`Kovobot Computer service (${config.backend}) listening on http://localhost:${info.port}`);
 });
