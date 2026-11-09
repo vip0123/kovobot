@@ -1,0 +1,61 @@
+# Builds the Bot service image, the one `docker compose up -d` runs (SELF-HOSTING.md).
+# Every pull request builds it as a check; every push to main also publishes it to
+# ghcr.io/vip0123/kovobot, tagged latest and with the short commit, for amd64 and arm64.
+# Repository setup, once, after the first publish: the package starts private, so
+# Packages → kovobot → Package settings → Change visibility → Public lets Operators
+# pull it without signing in. That can't be undone.
+name: Image
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - apps/landing/**
+      - .github/workflows/landing.yml
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - apps/landing/**
+      - .github/workflows/landing.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    env:
+      PUBLISH: ${{ github.event_name != 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - if: env.PUBLISH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/kovobot
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
