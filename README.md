@@ -101,4 +101,4 @@ Issues, ideas and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRI
 
 ## License
 
-The Bot service is open source under Apache-2.0. Billing and the Computer service will carry the Functional Source License (FSL-1.1-ALv2). "Kovobot" is a working name.
+Kovobot is open source under [Apache-2.0](LICENSE), except the Computer service in `apps/computers`, which carries the Functional Source License, [FSL-1.1-ALv2](apps/computers/LICENSE.md). FSL allows any use except offering a competing product, so you can self-host it, and each version becomes Apache-2.0 two years after its release. Billing will carry FSL too once it's built. "Kovobot" is a working name.
