@@ -7,6 +7,7 @@ import {
   type ModelAdapter,
   ModelError,
   type ModelEvent,
+  uniquePages,
   type WebSource,
 } from "./adapter.ts";
 import { xdotoolKeys } from "./computer-keys.ts";
@@ -208,13 +209,11 @@ function webSources(output: ResponseOutputItem[]): WebSource[] {
     for (const part of item.content) {
       if (part.type !== "output_text") continue;
       for (const annotation of part.annotations) {
-        if (annotation.type === "url_citation" && !pages.some((page) => page.url === annotation.url)) {
-          pages.push({ url: annotation.url, title: annotation.title || annotation.url });
-        }
+        if (annotation.type === "url_citation") pages.push({ url: annotation.url, title: annotation.title || annotation.url });
       }
     }
   }
-  return pages;
+  return uniquePages(pages);
 }
 
 /** One conversation item as Responses API input items. */

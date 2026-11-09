@@ -6,6 +6,7 @@ import {
   type ModelAdapter,
   ModelError,
   type ModelUsage,
+  uniquePages,
   type WebSource,
 } from "./adapter.ts";
 
@@ -61,7 +62,7 @@ export function createOpenAICompatibleAdapter({ apiKey, baseURL }: { apiKey: str
           if (typeof reasoning === "string" && reasoning) yield { type: "thinking", text: reasoning };
           for (const annotation of extra?.annotations ?? []) {
             const page = annotation.type === "url_citation" ? annotation.url_citation : undefined;
-            if (page?.url && !sources.some((source) => source.url === page.url)) sources.push({ url: page.url, title: page.title || page.url });
+            if (page?.url) sources.push({ url: page.url, title: page.title || page.url });
           }
           if (delta?.content) {
             text += delta.content;
@@ -99,7 +100,7 @@ export function createOpenAICompatibleAdapter({ apiKey, baseURL }: { apiKey: str
       if (finishReason === "content_filter") {
         throw new ModelError("The model server stopped the reply (content_filter).", { usage });
       }
-      if (sources.length > 0) yield { type: "sources", sources };
+      if (sources.length > 0) yield { type: "sources", sources: uniquePages(sources) };
       for (const call of calls.filter(Boolean)) {
         let input: Record<string, unknown> = {};
         try {

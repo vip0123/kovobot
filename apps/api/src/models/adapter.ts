@@ -106,7 +106,7 @@ export interface ModelRequest {
    * Asks the model to think where it can, and to stream what it thinks as "thinking"
    * events; "deep" asks it to think harder. Unset for Driver models, which work unseen.
    */
-  thinking?: "normal" | "deep";
+  thinking?: ThinkingEffort;
   /**
    * Gives the model its Model provider's own web search, a few searches per call at most;
    * the pages its reply draws on come back as a "sources" event.
@@ -114,10 +114,18 @@ export interface ModelRequest {
   webSearch?: boolean;
 }
 
+/** How hard a model thinks: as it sees fit, or harder ("think deeper"). */
+export type ThinkingEffort = "normal" | "deep";
+
 /** A web page a reply draws on. */
 export interface WebSource {
   url: string;
   title: string;
+}
+
+/** Each page once, in the order it first appears. */
+export function uniquePages(pages: WebSource[]): WebSource[] {
+  return pages.filter((page, index) => pages.findIndex((other) => other.url === page.url) === index);
 }
 
 /** The most web searches one model call may make: a ceiling on what a call can cost. */
@@ -163,7 +171,13 @@ export type ModelEvent =
    * evidence. `turn` is the whole answer in the Model provider's own shape, for
    * the next call in the same Task to replay.
    */
-  | { type: "done"; usage: ModelUsage[]; turn: unknown };
+  | {
+      type: "done";
+      usage: ModelUsage[];
+      turn: unknown;
+      /** The Model provider paused the answer part-way (Anthropic's pause_turn): send `turn` back to carry on. */
+      paused?: boolean;
+    };
 
 export interface ModelAdapter {
   /** One call to the Model provider: a single HTTP attempt, streamed. Throws ModelError if it fails. */

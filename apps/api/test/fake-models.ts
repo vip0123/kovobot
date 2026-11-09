@@ -33,7 +33,8 @@ abstract class FakeModelServer {
   protected deltas: string[] = ["Hello!"];
   private ending: Ending = { kind: "finish" };
   private server: Server | undefined;
-  private thoughts: string[] = [];
+  /** What each coming reply thinks, in order: one entry per reply. */
+  private thoughts: string[][] = [];
   private sources: FakeSource[] = [];
   /** The endings this Model provider's API can produce. */
   protected abstract readonly endings: ReadonlySet<Ending["kind"]>;
@@ -43,9 +44,12 @@ abstract class FakeModelServer {
     this.deltas = deltas;
   }
 
-  /** The next reply first streams these pieces of the model's thinking, as the Model provider shows it. */
+  /**
+   * The next reply first streams these pieces of the model's thinking, as the Model provider shows
+   * it. Called again before that reply, it sets what the reply after it thinks, and so on.
+   */
   thinkFirst(...pieces: string[]): void {
-    this.thoughts = pieces;
+    this.thoughts.push(pieces);
   }
 
   /** The next reply cites these web pages, as the Model provider's web search does. */
@@ -55,8 +59,7 @@ abstract class FakeModelServer {
 
   /** What the next reply thinks and cites; each holds for one reply. */
   protected takeExtras(): { thoughts: string[]; sources: FakeSource[] } {
-    const extras = { thoughts: this.thoughts, sources: this.sources };
-    this.thoughts = [];
+    const extras = { thoughts: this.thoughts.shift() ?? [], sources: this.sources };
     this.sources = [];
     return extras;
   }

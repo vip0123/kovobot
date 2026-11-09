@@ -52,7 +52,7 @@ Each key you set switches that Model provider's models on, for every Bot on your
 - **Local model servers.** Inside the container, `localhost` is the container itself, so reach a server on your machine as `host.docker.internal`.
 - **A `$` in a value.** Wrap that value in single quotes, because Docker Compose reads `$` as the start of a variable.
 - **Web search** uses each Model provider's own search, billed on your key by that provider: Anthropic, OpenAI, Google and OpenRouter. Each reply makes at most 5 searches. Anthropic's must be switched on for your organisation in the Claude Console. xAI and local model servers don't search here.
-- **Files** people attach (images, PDFs, text) are kept in your database with their message.
+- **Attachments** (images, PDFs and text files people send with a message) are kept in your database with their message.
 
 Every other setting is in [`.env.example`](.env.example), with a comment on what it does.
 

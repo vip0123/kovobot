@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
-import type { Db } from "@kovobot/db";
+import { type Db, transaction } from "@kovobot/db";
 import { runTask } from "./agent.ts";
 import type { AppDeps } from "./app.ts";
 import {
@@ -17,7 +17,7 @@ import { computerRoutes, computerSizes, deleteBotComputer } from "./computer-rou
 import { driveComputer, drivingFor } from "./driver.ts";
 import type { Customer } from "./customers.ts";
 import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
-import { type ModelAdapters, ModelError, type ModelProvider, type WebSource } from "./models/adapter.ts";
+import { type ModelAdapters, ModelError, type ModelProvider, uniquePages, type WebSource } from "./models/adapter.ts";
 import { describeModel, MODELS, type ModelInfo } from "./models/catalog.ts";
 
 export interface Bot {
@@ -31,6 +31,9 @@ export interface Bot {
 
 /** Driver models come only from the Model providers with a computer-use tool. */
 const DRIVER_PROVIDERS = new Set(["openai", "anthropic", "google"]);
+
+/** The Model providers a PDF isn't sent to (unchecked for xAI, unlikely on a local server): the model is told one came. */
+const MODEL_PROVIDERS_WITHOUT_PDFS: ReadonlySet<ModelProvider> = new Set(["xai", "local"]);
 
 /** The Model providers whose own web search a Bot can use; xAI's is unchecked here, local servers have none. */
 const SEARCHING_PROVIDERS: readonly ModelProvider[] = ["openai", "anthropic", "google", "openrouter"];
@@ -151,7 +154,7 @@ export function botRoutes(deps: AppDeps) {
 
   routes.get("/bots/:id/attachments/:attachmentId", async (c) => {
     const file = await findAttachment(deps.db, c.get("customer").id, c.req.param("id"), c.req.param("attachmentId"));
-    if (!file) return apiError(c, 404, "attachment_not_found", "There's no such file.");
+    if (!file) return apiError(c, 404, "attachment_not_found", "There's no such Attachment.");
     // Images show in the page; anything else downloads. Served as data, never as a page.
     const inline = file.mediaType.startsWith("image/");
     return c.body(new Uint8Array(file.data), 200, {
@@ -159,7 +162,8 @@ export function botRoutes(deps: AppDeps) {
       "content-disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
       "x-content-type-options": "nosniff",
       "content-security-policy": "sandbox; default-src 'none'",
-      "cache-control": "private, max-age=86400",
+      // Not kept in the browser's cache, where it would outlast signing out.
+      "cache-control": "private, no-store",
     });
   });
 
@@ -179,8 +183,8 @@ export function botRoutes(deps: AppDeps) {
     if (!model || !adapter) {
       return apiError(c, 503, "model_unavailable", `${model?.name ?? bot.model} isn't available here right now.`);
     }
-    const searches = webSearch === true;
-    if (searches && !webSearchProviders(deps).includes(model.provider)) {
+    const searchesTheWeb = webSearch === true;
+    if (searchesTheWeb && !webSearchProviders(deps).includes(model.provider)) {
       return apiError(c, 400, "web_search_unavailable", `${model.name} can't search the web here. Send the message without web search.`);
     }
 
@@ -189,10 +193,16 @@ export function botRoutes(deps: AppDeps) {
       return apiError(c, 409, "bot_busy", `${bot.name} is still answering the last message.`);
     }
     let conversation;
+    let sent: Message;
     try {
-      const sent = await addMessage(deps.db, conversationId, "user", text, deps.now());
-      await saveAttachments(deps.db, sent.id, files, deps.now());
-      conversation = await conversationForModel(deps.db, await recentMessages(deps.db, conversationId));
+      // The message and its Attachments are kept together, or not at all.
+      sent = await transaction(deps.db, async (client) => {
+        const message = await addMessage(client, conversationId, "user", text, deps.now());
+        return { ...message, attachments: await saveAttachments(client, message.id, files, deps.now()) };
+      });
+      conversation = await conversationForModel(deps.db, await recentMessages(deps.db, conversationId), {
+        pdfs: !MODEL_PROVIDERS_WITHOUT_PDFS.has(model.provider),
+      });
     } catch (error) {
       await stopReplying(deps.db, conversationId);
       throw error;
@@ -203,10 +213,12 @@ export function botRoutes(deps: AppDeps) {
       const send = async (event: string, data: unknown) => {
         if (!stream.aborted) await stream.writeSSE({ event, data: JSON.stringify(data) }).catch(() => {});
       };
+      // The Customer's message as saved, so the page can link its Attachments straight away.
+      await send("sent", { message: sent });
       let reply = "";
       let thinking = "";
       // A Task may search in more than one model call: every page once.
-      const found: { sources: WebSource[]; searchSuggestions?: string } = { sources: [] };
+      const cited: { sources: WebSource[]; searchSuggestions?: string } = { sources: [] };
       try {
         const driving = await drivingFor(deps, bot.id);
         const tools = driving ? { useComputer: (task: string) => driveComputer(deps, driving, task) } : undefined;
@@ -216,17 +228,22 @@ export function botRoutes(deps: AppDeps) {
           conversation,
           tools,
           thinking: thinkHarder === true ? ("deep" as const) : ("normal" as const),
-          webSearch: searches,
+          webSearch: searchesTheWeb,
         };
+        // A Task may make several model calls; each one's thinking starts a new paragraph.
+        let callEnded = false;
         for await (const event of runTask(adapter, task)) {
           if (event.type === "status") await send("status", { text: event.text });
+          if (event.type === "done") callEnded = true;
           if (event.type === "thinking") {
-            thinking += event.text;
-            await send("thinking", { text: event.text });
+            const text = thinking && callEnded ? `\n\n${event.text}` : event.text;
+            callEnded = false;
+            thinking += text;
+            await send("thinking", { text });
           }
           if (event.type === "sources") {
-            for (const page of event.sources) if (!found.sources.some((other) => other.url === page.url)) found.sources.push(page);
-            found.searchSuggestions = event.searchSuggestions ?? found.searchSuggestions;
+            cited.sources = uniquePages([...cited.sources, ...event.sources]);
+            cited.searchSuggestions = event.searchSuggestions ?? cited.searchSuggestions;
             await send("sources", { sources: event.sources, ...(event.searchSuggestions ? { searchSuggestions: event.searchSuggestions } : {}) });
           }
           if (event.type !== "text") continue;
@@ -235,12 +252,12 @@ export function botRoutes(deps: AppDeps) {
         }
         // An empty reply would break the conversation for Model providers that refuse empty turns.
         if (!reply.trim()) throw new Error("The model's reply was empty.");
-        const message = await addMessage(deps.db, conversationId, "assistant", reply, deps.now(), { thinking, found });
+        const message = await addMessage(deps.db, conversationId, "assistant", reply, deps.now(), { thinking, cited });
         await send("done", { message });
       } catch (error) {
         console.error(`Bot ${bot.id}: the model call failed`, error);
         // Keep what the Customer already saw, so a reload shows the same conversation.
-        if (reply) await addMessage(deps.db, conversationId, "assistant", reply, deps.now(), { thinking, found });
+        if (reply) await addMessage(deps.db, conversationId, "assistant", reply, deps.now(), { thinking, cited });
         await send(
           "error",
           error instanceof ModelError && error.keyRefused
@@ -423,12 +440,12 @@ async function stopReplying(db: Db, conversationId: string): Promise<void> {
 }
 
 async function addMessage(
-  db: Db,
+  db: Pick<Db, "query">,
   conversationId: string,
   role: Message["role"],
   content: string,
   now: Date,
-  extras: { thinking?: string; found?: { sources: WebSource[]; searchSuggestions?: string } } = {},
+  extras: { thinking?: string; cited?: { sources: WebSource[]; searchSuggestions?: string } } = {},
 ): Promise<Message> {
   const { rows } = await db.query<Message>(
     `INSERT INTO messages (conversation_id, role, content, thinking, sources, search_suggestions, created_at)
@@ -439,8 +456,8 @@ async function addMessage(
       role,
       content,
       extras.thinking || null,
-      extras.found?.sources.length ? JSON.stringify(extras.found.sources) : null,
-      extras.found?.searchSuggestions ?? null,
+      extras.cited?.sources.length ? JSON.stringify(extras.cited.sources) : null,
+      extras.cited?.searchSuggestions ?? null,
       now,
     ],
   );

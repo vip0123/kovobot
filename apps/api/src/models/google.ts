@@ -7,6 +7,7 @@ import {
   type ModelAdapter,
   ModelError,
   type ModelUsage,
+  uniquePages,
 } from "./adapter.ts";
 import { xdotoolKeys } from "./computer-keys.ts";
 
@@ -82,9 +83,12 @@ export function createGoogleAdapter({ apiKey, baseURL }: { apiKey: string; baseU
       }
       if (blocked) throw new ModelError(`Gemini stopped the reply (${blocked}).`, { usage });
       if (!finished) throw new ModelError("Gemini's reply was cut off.");
-      const sources = (grounding?.groundingChunks ?? [])
-        .flatMap((chunk) => (chunk.web?.uri ? [{ url: chunk.web.uri, title: chunk.web.title || chunk.web.domain || chunk.web.uri }] : []))
-        .filter((page, index, pages) => pages.findIndex((other) => other.url === page.url) === index);
+      // Google's search has no cap to set: its sources are what it grounded the reply on.
+      const sources = uniquePages(
+        (grounding?.groundingChunks ?? []).flatMap((chunk) =>
+          chunk.web?.uri ? [{ url: chunk.web.uri, title: chunk.web.title || chunk.web.domain || chunk.web.uri }] : [],
+        ),
+      );
       if (sources.length > 0) {
         const searchSuggestions = grounding?.searchEntryPoint?.renderedContent;
         yield { type: "sources", sources, ...(searchSuggestions ? { searchSuggestions } : {}) };

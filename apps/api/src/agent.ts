@@ -1,5 +1,5 @@
 import type { TaskEvent } from "./driver.ts";
-import type { ChatMessage, ConversationItem, FunctionTool, ModelAdapter, ToolCall } from "./models/adapter.ts";
+import type { ChatMessage, ConversationItem, FunctionTool, ModelAdapter, ThinkingEffort, ToolCall } from "./models/adapter.ts";
 
 /** The most model calls one Task makes before it stops. */
 const MAX_TASK_STEPS = 10;
@@ -36,7 +36,7 @@ export async function* runTask(
     conversation: ChatMessage[];
     tools?: TaskTools;
     /** How hard the model thinks; what it thinks streams as "thinking" events. */
-    thinking?: "normal" | "deep";
+    thinking?: ThinkingEffort;
     /** Whether the model may search the web; its sources come back as a "sources" event. */
     webSearch?: boolean;
   },
@@ -46,6 +46,7 @@ export async function* runTask(
   for (let step = 0; step < MAX_TASK_STEPS; step += 1) {
     const calls: ToolCall[] = [];
     let turn: unknown = null;
+    let paused = false;
     for await (const event of adapter.stream({
       model: task.model,
       instructions: botInstructions(task.botName, tools !== undefined),
@@ -55,8 +56,16 @@ export async function* runTask(
       webSearch: task.webSearch,
     })) {
       if (event.type === "tool_call") calls.push(event.call);
-      if (event.type === "done") turn = event.turn;
+      if (event.type === "done") {
+        turn = event.turn;
+        paused = event.paused === true;
+      }
       yield event;
+    }
+    // A paused answer goes back as it is, and the model carries on from it.
+    if (paused && calls.length === 0) {
+      conversation.push({ role: "turn", raw: turn });
+      continue;
     }
     if (calls.length === 0) return;
     conversation.push({ role: "turn", raw: turn });

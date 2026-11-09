@@ -10,7 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { api, type Attachment, type Bot, errorMessage, type Message, type ModelCatalog, type WebSource } from "./api.ts";
+import { api, ApiError, type Attachment, type Bot, errorMessage, type Message, type ModelCatalog, type WebSource } from "./api.ts";
 import { BotAvatar } from "./BotAvatar.tsx";
 import { BulbIcon, CheckIcon, CloseIcon, CopyIcon, FileIcon, GlobeIcon, PaperclipIcon, SendIcon } from "./Icons.tsx";
 import { modelLabel } from "./ModelPicker.tsx";
@@ -18,10 +18,17 @@ import { modelLabel } from "./ModelPicker.tsx";
 // The Markdown renderer loads with the first Bot page, not with sign-in; until then a reply shows as plain text.
 const Markdown = lazy(() => import("./Markdown.tsx").then(({ Markdown }) => ({ default: Markdown })));
 
-// The API's limits (apps/api/src/attachments.ts), checked here first so a too-big file is caught before it's read.
+// The API's limits (apps/api/src/attachments.ts), checked here first so a too-big Attachment is
+// caught before it's read. The API decides by the file's bytes; here, by its type and name.
 const MAX_FILES = 5;
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
-const MAX_TOTAL_BYTES = 12 * 1024 * 1024;
+const MB = 1024 * 1024;
+const MAX_TOTAL_BYTES = 12 * MB;
+const limitFor = (file: File): { bytes: number; label: string } =>
+  file.type.startsWith("image/")
+    ? { bytes: 5 * MB, label: "5 MB for an image" }
+    : file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")
+      ? { bytes: 10 * MB, label: "10 MB for a PDF" }
+      : { bytes: MB / 2, label: "512 KB for a text file" };
 const ACCEPTED =
   "image/png,image/jpeg,image/gif,image/webp,application/pdf,text/*,.md,.csv,.json,.txt,.log,.xml,.yaml,.yml,.ts,.tsx,.js,.py,.html,.css,.sql";
 
@@ -80,8 +87,12 @@ export function Conversation({
   const end = useRef<HTMLDivElement>(null);
   const empty = messages !== null && messages.length === 0 && streaming === null;
   const suggestions = canUseComputer ? [...SUGGESTIONS, COMPUTER_SUGGESTION] : SUGGESTIONS;
-  const canSearch = (catalog.webSearch ?? []).includes(providerOf(catalog, bot.model) ?? "");
+  const provider = providerOf(catalog, bot.model);
+  const canSearch = (catalog.webSearch ?? []).includes(provider ?? "");
   const searching = webSearch && canSearch;
+  // xAI isn't sent reasoning options yet (unchecked there), so thinking deeper would do nothing.
+  const canThinkHarder = provider !== "xai";
+  const thinksHarder = thinkHarder && canThinkHarder;
 
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
@@ -102,8 +113,9 @@ export function Conversation({
         setError(`Attach up to ${MAX_FILES} files at a time.`);
         break;
       }
-      if (file.size > MAX_FILE_BYTES) {
-        setError(`${file.name} is too big: 10 MB at most.`);
+      const limit = limitFor(file);
+      if (file.size > limit.bytes) {
+        setError(`${file.name} is too big: ${limit.label} at most.`);
         continue;
       }
       next.push({ file, preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined });
@@ -116,6 +128,8 @@ export function Conversation({
   }
 
   function unpick(index: number) {
+    const preview = picked[index]?.preview;
+    if (preview) URL.revokeObjectURL(preview);
     setPicked(picked.filter((_, at) => at !== index));
   }
 
@@ -128,15 +142,17 @@ export function Conversation({
     try {
       attachments = await Promise.all(picked.map(async ({ file }) => ({ name: file.name, data: await base64(file) })));
     } catch {
-      setError("A file couldn't be read. Pick it again.");
+      setError("An Attachment couldn't be read. Pick it again.");
       return;
     }
     const sentFiles: Attachment[] = picked.map(({ file, preview }) => ({ name: file.name, mediaType: file.type, size: file.size, preview }));
+    const pendingId = `pending-${Date.now()}`;
+    const unsent = { draft, picked };
     setDraft("");
     setPicked([]);
     onMessages((current) => [
       ...current,
-      { id: `pending-${Date.now()}`, role: "user", content, attachments: sentFiles, createdAt: new Date().toISOString() },
+      { id: pendingId, role: "user", content, attachments: sentFiles, createdAt: new Date().toISOString() },
     ]);
     const reply = { text: "", thinking: "", sources: [] as WebSource[], searchSuggestions: undefined as string | undefined };
     setStreaming({ ...reply });
@@ -144,8 +160,13 @@ export function Conversation({
       const saved = await api.sendMessage(
         bot.id,
         content,
-        { attachments, thinkHarder, webSearch: searching },
+        { attachments, thinkHarder: thinksHarder, webSearch: searching },
         {
+          // The saved message replaces the one shown while sending, so its Attachments link straight away.
+          onSent: (saved) => {
+            onMessages((current) => current.map((message) => (message.id === pendingId ? saved : message)));
+            for (const file of sentFiles) if (file.preview) URL.revokeObjectURL(file.preview);
+          },
           onText: (text) => {
             reply.text += text;
             setStreaming({ ...reply });
@@ -166,8 +187,13 @@ export function Conversation({
       );
       onMessages((current) => [...current, saved]);
     } catch (caught) {
-      // The Bot service keeps what the model already wrote, so the page keeps it too.
-      if (reply.text) {
+      if (caught instanceof ApiError && caught.status >= 400) {
+        // Refused before it was saved (too big, a file it can't take, the Bot busy): put it all back.
+        onMessages((current) => current.filter((message) => message.id !== pendingId));
+        setDraft(unsent.draft);
+        setPicked(unsent.picked);
+      } else if (reply.text) {
+        // The Bot service keeps what the model already wrote, so the page keeps it too.
         onMessages((current) => [
           ...current,
           {
@@ -176,6 +202,7 @@ export function Conversation({
             content: reply.text,
             thinking: reply.thinking || null,
             sources: reply.sources,
+            searchSuggestions: reply.searchSuggestions ?? null,
             createdAt: new Date().toISOString(),
           },
         ]);
@@ -328,17 +355,19 @@ export function Conversation({
             >
               <PaperclipIcon size={19} />
             </button>
-            <button
-              type="button"
-              className={`toggle${thinkHarder ? " on" : ""}`}
-              aria-label="Think deeper"
-              aria-pressed={thinkHarder}
-              title="The model takes longer and thinks harder"
-              onClick={() => setThinkHarder(!thinkHarder)}
-            >
-              <BulbIcon size={17} />
-              <span className="toggle-label">Think deeper</span>
-            </button>
+            {canThinkHarder && (
+              <button
+                type="button"
+                className={`toggle${thinkHarder ? " on" : ""}`}
+                aria-label="Think deeper"
+                aria-pressed={thinkHarder}
+                title="The model takes longer and thinks harder"
+                onClick={() => setThinkHarder(!thinkHarder)}
+              >
+                <BulbIcon size={17} />
+                <span className="toggle-label">Think deeper</span>
+              </button>
+            )}
             {canSearch && (
               <button
                 type="button"

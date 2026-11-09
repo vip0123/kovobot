@@ -51,6 +51,10 @@ async function send(browser: Browser, bot: Bot, body: Record<string, unknown>) {
   return serverSentEvents(response);
 }
 
+// A second install, with a local model server: no web search there, and no PDFs sent to it.
+// Made here, outside any test, so its fakes start before the tests and stop after them.
+const local = startTestServer({}, { local: true });
+
 const dataOf = (events: Array<{ event: string; data: unknown }>, name: string) =>
   events.filter((event) => event.event === name).map((event) => event.data as Record<string, unknown>);
 
@@ -73,6 +77,24 @@ describe("thinking, shown in chat", () => {
 
     await send(browser, bot, { content: "Count again, carefully.", thinkHarder: true });
     expect(server.openai.requests.at(-1)!.reasoning).toEqual({ summary: "auto", effort: "high" });
+  });
+
+  test("a reply Anthropic pauses (as a long search can) carries on in the same Task; each call's thinking is its own paragraph", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser, "Scribe", "claude-sonnet-5-5");
+    server.anthropic.thinkFirst("Searching.");
+    server.anthropic.thinkFirst("Found it.");
+    server.anthropic.replyWith("Node 26.");
+    server.anthropic.endNextReply({ kind: "stop", reason: "pause_turn" });
+    const before = server.anthropic.requests.length;
+
+    const events = await chat(browser, bot, "Which Node.js is current?");
+
+    expect(server.anthropic.requests.length - before).toBe(2);
+    // Anthropic carries on from its own paused answer, sent back as the last message.
+    const resumed = server.anthropic.requests.at(-1)!.body.messages as Array<{ role: string }>;
+    expect(resumed.at(-1)!.role).toBe("assistant");
+    expect(dataOf(events, "done")[0]).toMatchObject({ message: { thinking: "Searching.\n\nFound it." } });
   });
 });
 
@@ -103,7 +125,6 @@ describe("web search", () => {
   });
 
   test("a model whose Model provider has no web search here says so, and nothing is sent", async () => {
-    const local = startTestServer({}, { local: true });
     const browser = local.browser();
     await local.signInByEmail(browser, uniqueEmail());
     const created = await browser.post("/api/bots", { name: "Scout", model: "local:qwen3" });
@@ -555,6 +576,46 @@ describe("attachments", () => {
     // Later messages still show the model the files.
     await chat(browser, bot, "And the report?");
     expect(JSON.stringify(server.openai.requests.at(-1)!.input)).toContain("report.pdf");
+
+    // The page hears the saved message first, so its files link straight away.
+    expect(dataOf(events, "sent")[0]).toMatchObject({
+      message: { id: sent!.id, attachments: [{ id: sent!.attachments[0]!.id }, {}, {}] },
+    });
+  });
+
+  test("the model sees files newest first within the budget; anything older than the first that doesn't fit is named", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    const image = (megabytes: number) =>
+      Buffer.concat([Buffer.from(PNG, "base64"), Buffer.alloc(megabytes * 1024 * 1024)]).toString("base64");
+
+    await send(browser, bot, { content: "Notes.", attachments: [{ name: "notes.md", data: NOTES }] });
+    await send(browser, bot, {
+      content: "Two photos.",
+      attachments: [
+        { name: "first.png", data: image(4.5) },
+        { name: "second.png", data: image(4.5) },
+      ],
+    });
+    await send(browser, bot, { content: "One more.", attachments: [{ name: "third.png", data: image(4.5) }] });
+
+    const input = JSON.stringify(server.openai.requests.at(-1)!.input);
+    expect(input.match(/input_image/g)?.length).toBe(2);
+    expect(input).toContain("[first.png was attached here; it isn't shown any more.]");
+    expect(input).toContain("[notes.md was attached here; it isn't shown any more.]");
+  });
+
+  test("a model server that can't read PDFs here is told a PDF was attached instead of being sent it", async () => {
+    const browser = local.browser();
+    await local.signInByEmail(browser, uniqueEmail());
+    const created = await browser.post("/api/bots", { name: "Scout", model: "local:qwen3" });
+    const bot = ((await created.json()) as { bot: Bot }).bot;
+
+    await send(browser, bot, { content: "Read this.", attachments: [{ name: "report.pdf", data: PDF }] });
+
+    const sent = JSON.stringify(local.chatCompletions.requests.at(-1)!.body.messages);
+    expect(sent).not.toContain("file_data");
+    expect(sent).toContain("[report.pdf is a PDF, which this model can't read here.]");
   });
 
   test("a message of files alone is fine", async () => {

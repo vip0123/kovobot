@@ -75,6 +75,8 @@ export interface MessageOptions {
 
 /** What the Bot does while it replies, as it streams. */
 export interface ReplyHandlers {
+  /** The Customer's message as saved, with its Attachments' ids. */
+  onSent?: (message: Message) => void;
   onText: (text: string) => void;
   onStatus?: (status: string) => void;
   onThinking?: (text: string) => void;
@@ -191,7 +193,7 @@ export const api = {
    * web search found. Resolves with the saved reply.
    */
   async sendMessage(botId: string, content: string, options: MessageOptions, handlers: ReplyHandlers): Promise<Message> {
-    const { onText, onStatus = () => {}, onThinking = () => {}, onSources = () => {} } = handlers;
+    const { onSent = () => {}, onText, onStatus = () => {}, onThinking = () => {}, onSources = () => {} } = handlers;
     const response = await send(`/bots/${botId}/messages`, { method: "POST", json: { content, ...options } });
     const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
     let buffer = "";
@@ -204,6 +206,7 @@ export const api = {
         const event = parseServerSentEvent(buffer.slice(0, end));
         buffer = buffer.slice(end + 2);
         if (event.name === "delta") onText((event.data as { text: string }).text);
+        if (event.name === "sent") onSent((event.data as { message: Message }).message);
         if (event.name === "status") onStatus((event.data as { text: string }).text);
         if (event.name === "thinking") onThinking((event.data as { text: string }).text);
         if (event.name === "sources") {

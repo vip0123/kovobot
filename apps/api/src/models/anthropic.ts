@@ -14,6 +14,7 @@ import {
   ModelError,
   type ModelEvent,
   type ModelUsage,
+  uniquePages,
   type WebSource,
 } from "./adapter.ts";
 import { xdotoolKeys } from "./computer-keys.ts";
@@ -137,7 +138,8 @@ export function createAnthropicAdapter({
       const sources = webSources(content);
       if (sources.length > 0) yield { type: "sources", sources };
       yield* calls(content);
-      yield { type: "done", usage, turn: content };
+      // A long turn with server tools (web search) can pause; the Task sends it back to carry on.
+      yield { type: "done", usage, turn: content, ...(stopReason === "pause_turn" ? { paused: true } : {}) };
     },
   };
 }
@@ -159,8 +161,7 @@ function webSources(content: BetaContentBlock[]): WebSource[] {
       for (const result of block.content) found.push({ url: result.url, title: result.title });
     }
   }
-  const unique = (pages: WebSource[]) => pages.filter((page, index) => pages.findIndex((other) => other.url === page.url) === index);
-  return cited.length > 0 ? unique(cited) : unique(found).slice(0, UNCITED_RESULTS_SHOWN);
+  return cited.length > 0 ? uniquePages(cited) : uniquePages(found).slice(0, UNCITED_RESULTS_SHOWN);
 }
 
 /** The model's calls in its answer: our function tools' calls, and its turn on the Computer. */
