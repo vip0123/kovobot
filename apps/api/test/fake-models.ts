@@ -168,7 +168,13 @@ export class FakeAnthropic extends FakeModelServer {
         content_block: {
           type: "web_search_tool_result",
           tool_use_id: "srvtoolu_1",
-          content: sources.map((source) => ({ type: "web_search_result", ...source, encrypted_content: "fake", page_age: null })),
+          // The search also finds a page the reply doesn't cite.
+          content: [...sources, { url: "https://example.com/unrelated", title: "Unrelated" }].map((source) => ({
+            type: "web_search_result",
+            ...source,
+            encrypted_content: "fake",
+            page_age: null,
+          })),
         },
       });
       send("content_block_stop", { index: index++ });

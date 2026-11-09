@@ -23,8 +23,13 @@ const MODELS_WITH_FALLBACK = new Set(["claude-fable-5-1", "claude-opus-5-5", "cl
 /** Anthropic's computer-use tool; its actions arrive as tool_use blocks named after each action. */
 const COMPUTER_TOOLSET = "computer_toolset_20260801";
 const COMPUTER = "computer";
-/** Anthropic's web search server tool, the newest version. */
-const WEB_SEARCH_TOOL = "web_search_20260318" as const;
+/**
+ * Anthropic's web search server tool, the version that cites the pages its reply uses. The newer
+ * ones (20260209, 20260318) filter results with code execution and, live, cite nothing.
+ */
+const WEB_SEARCH_TOOL = "web_search_20250305" as const;
+/** The most search results shown when a reply cites none. */
+const UNCITED_RESULTS_SHOWN = 5;
 
 /** Anthropic's Messages API, through the official SDK (ADR 0005), with prompt caching on. */
 export function createAnthropicAdapter({
@@ -154,8 +159,8 @@ function webSources(content: BetaContentBlock[]): WebSource[] {
       for (const result of block.content) found.push({ url: result.url, title: result.title });
     }
   }
-  const pages = cited.length > 0 ? cited : found;
-  return pages.filter((page, index) => pages.findIndex((other) => other.url === page.url) === index);
+  const unique = (pages: WebSource[]) => pages.filter((page, index) => pages.findIndex((other) => other.url === page.url) === index);
+  return cited.length > 0 ? unique(cited) : unique(found).slice(0, UNCITED_RESULTS_SHOWN);
 }
 
 /** The model's calls in its answer: our function tools' calls, and its turn on the Computer. */

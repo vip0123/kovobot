@@ -27,13 +27,58 @@ export interface ModelCatalog {
   models: ModelInfo[];
   openrouter: boolean;
   local: boolean;
+  /** The Model providers whose models may search the web here. */
+  webSearch?: string[];
 }
 
 export interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /** What the model thought before this reply, as its Model provider showed it. */
+  thinking?: string | null;
+  /** The web pages this reply drew on. */
+  sources?: WebSource[] | null;
+  /** Google's search suggestions for a reply grounded with Google Search, as Google's HTML. */
+  searchSuggestions?: string | null;
+  /** Files sent with this message. */
+  attachments?: Attachment[];
   createdAt: string;
+}
+
+export interface WebSource {
+  url: string;
+  title: string;
+}
+
+/** A file sent with a message. A file just sent, not yet saved, carries a local `preview` URL instead of an id. */
+export interface Attachment {
+  id?: string;
+  name: string;
+  mediaType: string;
+  size: number;
+  preview?: string;
+}
+
+/** A file to send with a message: its name and its contents, base64. */
+export interface OutgoingFile {
+  name: string;
+  data: string;
+}
+
+/** What a message asks of the Bot besides its words. */
+export interface MessageOptions {
+  attachments?: OutgoingFile[];
+  thinkHarder?: boolean;
+  webSearch?: boolean;
+}
+
+/** What the Bot does while it replies, as it streams. */
+export interface ReplyHandlers {
+  onText: (text: string) => void;
+  onStatus?: (status: string) => void;
+  onThinking?: (text: string) => void;
+  onSources?: (sources: WebSource[], searchSuggestions?: string) => void;
 }
 
 /** A Bot's Computer. Shut down keeps its disk; Asleep keeps its memory too. */
@@ -136,18 +181,18 @@ export const api = {
   /** A link to the Computer's live view, to open as a WebSocket within a minute. */
   liveView: (botId: string) => request<{ url: string; expiresAt: string }>(`/bots/${botId}/computer/live-view`, { method: "POST" }),
 
+  /** Where a message's file can be fetched, for its Customer only. */
+  attachmentUrl: (botId: string, attachmentId: string) => `/api/bots/${botId}/attachments/${attachmentId}`,
+
   /**
-   * Sends a message on the web Channel and streams the Bot's reply: `onText`
-   * gets each piece as the model writes it, and `onStatus` what the Bot is doing,
-   * such as using its Computer. Resolves with the saved reply.
+   * Sends a message on the web Channel and streams the Bot's reply: `onText` gets
+   * each piece as the model writes it, `onThinking` what it thinks first, `onStatus`
+   * what the Bot is doing (such as using its Computer) and `onSources` the pages a
+   * web search found. Resolves with the saved reply.
    */
-  async sendMessage(
-    botId: string,
-    content: string,
-    onText: (text: string) => void,
-    onStatus: (status: string) => void = () => {},
-  ): Promise<Message> {
-    const response = await send(`/bots/${botId}/messages`, { method: "POST", json: { content } });
+  async sendMessage(botId: string, content: string, options: MessageOptions, handlers: ReplyHandlers): Promise<Message> {
+    const { onText, onStatus = () => {}, onThinking = () => {}, onSources = () => {} } = handlers;
+    const response = await send(`/bots/${botId}/messages`, { method: "POST", json: { content, ...options } });
     const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
     let buffer = "";
     for (;;) {
@@ -160,6 +205,11 @@ export const api = {
         buffer = buffer.slice(end + 2);
         if (event.name === "delta") onText((event.data as { text: string }).text);
         if (event.name === "status") onStatus((event.data as { text: string }).text);
+        if (event.name === "thinking") onThinking((event.data as { text: string }).text);
+        if (event.name === "sources") {
+          const found = event.data as { sources: WebSource[]; searchSuggestions?: string };
+          onSources(found.sources, found.searchSuggestions);
+        }
         if (event.name === "done") return (event.data as { message: Message }).message;
         if (event.name === "error") {
           const error = event.data as { code: string; message: string };

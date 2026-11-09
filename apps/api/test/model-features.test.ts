@@ -140,7 +140,8 @@ describe("web search", () => {
     anthropic.replyWith("Node 26 is current.");
     const seen = await events(adapter, { model: "claude-sonnet-5-5", webSearch: true });
 
-    expect(anthropic.requests.at(-1)!.body.tools).toEqual([{ type: "web_search_20260318", name: "web_search", max_uses: 5 }]);
+    // The version that cites what it uses: the newer ones filter results with code and cite nothing.
+    expect(anthropic.requests.at(-1)!.body.tools).toEqual([{ type: "web_search_20250305", name: "web_search", max_uses: 5 }]);
     expect(textOf(seen)).toBe("Node 26 is current.");
     expect(sourcesOf(seen)).toEqual({ type: "sources", sources: SOURCES });
 

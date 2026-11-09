@@ -1,0 +1,543 @@
+import {
+  type ClipboardEvent,
+  type DragEvent,
+  type FormEvent,
+  type KeyboardEvent,
+  lazy,
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { api, type Attachment, type Bot, errorMessage, type Message, type ModelCatalog, type WebSource } from "./api.ts";
+import { BotAvatar } from "./BotAvatar.tsx";
+import { BulbIcon, CheckIcon, CloseIcon, CopyIcon, FileIcon, GlobeIcon, PaperclipIcon, SendIcon } from "./Icons.tsx";
+import { modelLabel } from "./ModelPicker.tsx";
+
+// The Markdown renderer loads with the first Bot page, not with sign-in; until then a reply shows as plain text.
+const Markdown = lazy(() => import("./Markdown.tsx").then(({ Markdown }) => ({ default: Markdown })));
+
+// The API's limits (apps/api/src/attachments.ts), checked here first so a too-big file is caught before it's read.
+const MAX_FILES = 5;
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 12 * 1024 * 1024;
+const ACCEPTED =
+  "image/png,image/jpeg,image/gif,image/webp,application/pdf,text/*,.md,.csv,.json,.txt,.log,.xml,.yaml,.yml,.ts,.tsx,.js,.py,.html,.css,.sql";
+
+const SUGGESTIONS = [
+  { label: "Explain something", prompt: "Explain how compound interest works, in plain words." },
+  { label: "Draft a message", prompt: "Draft a short, friendly message declining a meeting next week." },
+  { label: "Plan my day", prompt: "Help me plan a focused workday around three priorities." },
+];
+const COMPUTER_SUGGESTION = {
+  label: "Use your Computer",
+  prompt: "Use your Computer: open Firefox, find today's top news headline and tell me what it says.",
+};
+
+/** The Model provider a model id belongs to, as the catalog and its route prefix say. */
+function providerOf(catalog: ModelCatalog, model: string): string | undefined {
+  if (model.startsWith("openrouter:")) return "openrouter";
+  if (model.startsWith("local:")) return "local";
+  return catalog.models.find((listed) => listed.id === model)?.provider;
+}
+
+/** A file picked to send, with a preview for images. */
+interface Picked {
+  file: File;
+  preview?: string;
+}
+
+/** The Bot's Conversation on the web Channel, and the box to write in. */
+export function Conversation({
+  bot,
+  catalog,
+  messages,
+  loadError,
+  onMessages,
+  canUseComputer,
+}: {
+  bot: Bot;
+  catalog: ModelCatalog;
+  messages: Message[] | null;
+  loadError: string | null;
+  onMessages: (update: (messages: Message[]) => Message[]) => void;
+  canUseComputer: boolean;
+}) {
+  const [draft, setDraft] = useState("");
+  const [picked, setPicked] = useState<Picked[]>([]);
+  const [thinkHarder, setThinkHarder] = useState(false);
+  const [webSearch, setWebSearch] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  // The reply being written: its text, what the model thinks first, and the pages it found.
+  const [streaming, setStreaming] = useState<{ text: string; thinking: string; sources: WebSource[]; searchSuggestions?: string } | null>(
+    null,
+  );
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const end = useRef<HTMLDivElement>(null);
+  const empty = messages !== null && messages.length === 0 && streaming === null;
+  const suggestions = canUseComputer ? [...SUGGESTIONS, COMPUTER_SUGGESTION] : SUGGESTIONS;
+  const canSearch = (catalog.webSearch ?? []).includes(providerOf(catalog, bot.model) ?? "");
+  const searching = webSearch && canSearch;
+
+  useEffect(() => {
+    end.current?.scrollIntoView({ block: "end" });
+  }, [messages, streaming]);
+
+  // The box grows with what's typed, up to a limit, then scrolls.
+  useLayoutEffect(() => {
+    const textarea = box.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 220)}px`;
+  }, [draft]);
+
+  function pick(files: FileList | File[]) {
+    const next = [...picked];
+    for (const file of Array.from(files)) {
+      if (next.length >= MAX_FILES) {
+        setError(`Attach up to ${MAX_FILES} files at a time.`);
+        break;
+      }
+      if (file.size > MAX_FILE_BYTES) {
+        setError(`${file.name} is too big: 10 MB at most.`);
+        continue;
+      }
+      next.push({ file, preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined });
+    }
+    if (next.reduce((sum, { file }) => sum + file.size, 0) > MAX_TOTAL_BYTES) {
+      setError("These files come to more than 12 MB: send fewer at a time.");
+      return;
+    }
+    setPicked(next);
+  }
+
+  function unpick(index: number) {
+    setPicked(picked.filter((_, at) => at !== index));
+  }
+
+  async function sendMessage(event?: FormEvent) {
+    event?.preventDefault();
+    const content = draft.trim();
+    if ((!content && picked.length === 0) || streaming !== null) return;
+    setError(null);
+    let attachments;
+    try {
+      attachments = await Promise.all(picked.map(async ({ file }) => ({ name: file.name, data: await base64(file) })));
+    } catch {
+      setError("A file couldn't be read. Pick it again.");
+      return;
+    }
+    const sentFiles: Attachment[] = picked.map(({ file, preview }) => ({ name: file.name, mediaType: file.type, size: file.size, preview }));
+    setDraft("");
+    setPicked([]);
+    onMessages((current) => [
+      ...current,
+      { id: `pending-${Date.now()}`, role: "user", content, attachments: sentFiles, createdAt: new Date().toISOString() },
+    ]);
+    const reply = { text: "", thinking: "", sources: [] as WebSource[], searchSuggestions: undefined as string | undefined };
+    setStreaming({ ...reply });
+    try {
+      const saved = await api.sendMessage(
+        bot.id,
+        content,
+        { attachments, thinkHarder, webSearch: searching },
+        {
+          onText: (text) => {
+            reply.text += text;
+            setStreaming({ ...reply });
+            // Writing again means whatever the Bot was doing, such as using its Computer, is over.
+            setStatus(null);
+          },
+          onThinking: (text) => {
+            reply.thinking += text;
+            setStreaming({ ...reply });
+          },
+          onSources: (sources, searchSuggestions) => {
+            reply.sources = [...reply.sources, ...sources.filter((page) => !reply.sources.some((other) => other.url === page.url))];
+            reply.searchSuggestions = searchSuggestions ?? reply.searchSuggestions;
+            setStreaming({ ...reply });
+          },
+          onStatus: setStatus,
+        },
+      );
+      onMessages((current) => [...current, saved]);
+    } catch (caught) {
+      // The Bot service keeps what the model already wrote, so the page keeps it too.
+      if (reply.text) {
+        onMessages((current) => [
+          ...current,
+          {
+            id: `partial-${Date.now()}`,
+            role: "assistant",
+            content: reply.text,
+            thinking: reply.thinking || null,
+            sources: reply.sources,
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+      }
+      setError(errorMessage(caught));
+    } finally {
+      setStreaming(null);
+      setStatus(null);
+      box.current?.focus();
+    }
+  }
+
+  function sendOnEnter(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      void sendMessage();
+    }
+  }
+
+  function pasteFiles(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (event.clipboardData.files.length === 0) return;
+    event.preventDefault();
+    pick(event.clipboardData.files);
+  }
+
+  function dropFiles(event: DragEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setDragging(false);
+    if (event.dataTransfer.files.length > 0) pick(event.dataTransfer.files);
+  }
+
+  function suggest(prompt: string) {
+    setDraft(prompt);
+    box.current?.focus();
+  }
+
+  return (
+    <section className={`conversation${empty ? " is-empty" : ""}`} aria-label={`Conversation with ${bot.name}`}>
+      <div className="scroller">
+        <div className="column" aria-live="polite">
+          {messages === null && <p className="muted loading-line">Loading the Conversation…</p>}
+          {loadError && (
+            <p className="alert" role="alert">
+              {loadError}
+            </p>
+          )}
+          {empty && (
+            <div className="greeting">
+              <BotAvatar id={bot.id} name={bot.name} size="large" />
+              <h2>What should {bot.name} do?</h2>
+              <p className="muted">
+                {bot.name} thinks with {modelLabel(catalog, bot.model)}. Your Conversation is kept here.
+              </p>
+            </div>
+          )}
+          {messages?.map((message) =>
+            message.role === "user" ? (
+              <UserMessage key={message.id} bot={bot} message={message} />
+            ) : (
+              <BotMessage
+                key={message.id}
+                bot={bot}
+                text={message.content}
+                thinking={message.thinking ?? ""}
+                sources={message.sources ?? []}
+                searchSuggestions={message.searchSuggestions ?? undefined}
+              />
+            ),
+          )}
+          {streaming !== null && (
+            <BotMessage
+              bot={bot}
+              text={streaming.text}
+              thinking={streaming.thinking}
+              sources={streaming.sources}
+              searchSuggestions={streaming.searchSuggestions}
+              streaming
+              status={status}
+            />
+          )}
+          {error && (
+            <p className="alert" role="alert">
+              {error}
+            </p>
+          )}
+          <div ref={end} />
+        </div>
+      </div>
+      <div className="composer-area">
+        <form
+          className={`composer${dragging ? " dragging" : ""}`}
+          onSubmit={sendMessage}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={dropFiles}
+        >
+          {picked.length > 0 && (
+            <ul className="picked" aria-label="Files to send">
+              {picked.map(({ file, preview }, index) => (
+                <li key={`${file.name}-${index}`} className="picked-file">
+                  {preview ? <img src={preview} alt="" className="picked-thumb" /> : <FileIcon size={18} />}
+                  <span className="picked-name" title={file.name}>
+                    {file.name}
+                  </span>
+                  <span className="picked-size">{formatSize(file.size)}</span>
+                  <button type="button" className="icon-button tiny" aria-label={`Remove ${file.name}`} onClick={() => unpick(index)}>
+                    <CloseIcon size={14} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <label htmlFor="message" className="visually-hidden">
+            Message {bot.name}
+          </label>
+          <textarea
+            id="message"
+            ref={box}
+            rows={1}
+            autoFocus
+            placeholder={`Message ${bot.name}…`}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={sendOnEnter}
+            onPaste={pasteFiles}
+          />
+          <div className="composer-tools">
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              accept={ACCEPTED}
+              className="visually-hidden"
+              tabIndex={-1}
+              aria-hidden="true"
+              onChange={(event) => {
+                if (event.target.files) pick(event.target.files);
+                event.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Attach files"
+              title="Attach images, PDFs or text files"
+              onClick={() => fileInput.current?.click()}
+            >
+              <PaperclipIcon size={19} />
+            </button>
+            <button
+              type="button"
+              className={`toggle${thinkHarder ? " on" : ""}`}
+              aria-label="Think deeper"
+              aria-pressed={thinkHarder}
+              title="The model takes longer and thinks harder"
+              onClick={() => setThinkHarder(!thinkHarder)}
+            >
+              <BulbIcon size={17} />
+              <span className="toggle-label">Think deeper</span>
+            </button>
+            {canSearch && (
+              <button
+                type="button"
+                className={`toggle${webSearch ? " on" : ""}`}
+                aria-label="Search the web"
+                aria-pressed={webSearch}
+                title="The model may search the web and says where it found things"
+                onClick={() => setWebSearch(!webSearch)}
+              >
+                <GlobeIcon size={17} />
+                <span className="toggle-label">Search the web</span>
+              </button>
+            )}
+            <button
+              type="submit"
+              className="send-button"
+              aria-label="Send"
+              disabled={streaming !== null || (!draft.trim() && picked.length === 0)}
+            >
+              <SendIcon size={18} />
+            </button>
+          </div>
+        </form>
+        {empty ? (
+          <div className="suggestions">
+            {suggestions.map((suggestion) => (
+              <button key={suggestion.label} type="button" className="chip" onClick={() => suggest(suggestion.prompt)}>
+                {suggestion.label}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="composer-hint">Enter to send · Shift + Enter for a new line · drop or paste files to attach</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** One of the Customer's messages: its files, then its words. */
+function UserMessage({ bot, message }: { bot: Bot; message: Message }) {
+  const files = message.attachments ?? [];
+  return (
+    <div className="message user">
+      {files.length > 0 && (
+        <div className="user-files">
+          {files.map((file, index) => {
+            const url = file.id ? api.attachmentUrl(bot.id, file.id) : undefined;
+            const image = file.mediaType.startsWith("image/");
+            if (image && (file.preview ?? url)) {
+              return (
+                <a key={file.id ?? index} href={url ?? file.preview} target="_blank" rel="noopener noreferrer" className="file-thumb">
+                  <img src={file.preview ?? url} alt={file.name} />
+                </a>
+              );
+            }
+            return (
+              <a key={file.id ?? index} href={url} download={file.name} className="file-chip">
+                <FileIcon size={16} />
+                <span className="file-chip-name">{file.name}</span>
+                <span className="file-chip-size">{formatSize(file.size)}</span>
+              </a>
+            );
+          })}
+        </div>
+      )}
+      {message.content && <div className="user-text">{message.content}</div>}
+    </div>
+  );
+}
+
+/** One of the Bot's replies, or the one it's writing now: what it thought, its words, its sources. */
+function BotMessage({
+  bot,
+  text,
+  thinking,
+  sources,
+  searchSuggestions,
+  streaming = false,
+  status = null,
+}: {
+  bot: Bot;
+  text: string;
+  thinking: string;
+  sources: WebSource[];
+  searchSuggestions?: string;
+  streaming?: boolean;
+  status?: string | null;
+}) {
+  // Open while the model is still thinking; folded away once it answers.
+  const thinkingNow = streaming && !text;
+  return (
+    <div className="message bot" aria-busy={streaming || undefined}>
+      <BotAvatar id={bot.id} name={bot.name} size="small" />
+      <div className="bot-text">
+        {thinking && (
+          <details className="thinking" key={thinkingNow ? "now" : "done"} open={thinkingNow}>
+            <summary>
+              {thinkingNow && <span className="logo-mark pulse" aria-hidden="true" />}
+              {thinkingNow ? "Thinking…" : "Thought process"}
+            </summary>
+            <div className="thinking-text">{thinking}</div>
+          </details>
+        )}
+        {text ? (
+          <Suspense fallback={<div className="markdown plain">{text}</div>}>
+            <Markdown text={text} />
+          </Suspense>
+        ) : (
+          !thinking && (
+            <span className="typing" role="status" aria-label={`${bot.name} is thinking`}>
+              <span />
+              <span />
+              <span />
+            </span>
+          )
+        )}
+        {status && (
+          <span className="status-chip">
+            <span className="logo-mark pulse" aria-hidden="true" />
+            {status}
+          </span>
+        )}
+        {sources.length > 0 && <Sources sources={sources} searchSuggestions={searchSuggestions} />}
+        {!streaming && text && <CopyButton text={text} />}
+      </div>
+    </div>
+  );
+}
+
+/** The pages a reply drew on, and Google's search suggestions when Google Search grounded it. */
+function Sources({ sources, searchSuggestions }: { sources: WebSource[]; searchSuggestions?: string }) {
+  return (
+    <div className="sources">
+      <span className="sources-label">Sources</span>
+      <ol className="source-list">
+        {sources.map((source, index) => (
+          <li key={source.url}>
+            <a href={source.url} target="_blank" rel="noopener noreferrer" className="source" title={source.url}>
+              <span className="source-index">{index + 1}</span>
+              <span className="source-title">{source.title}</span>
+            </a>
+          </li>
+        ))}
+      </ol>
+      {searchSuggestions && (
+        // Google's own HTML, shown as Google asks, in a frame that can't run scripts or touch the page.
+        <iframe
+          className="search-suggestions"
+          title="Google Search suggestions"
+          sandbox="allow-popups allow-popups-to-escape-sandbox"
+          // Declaring both colour schemes keeps the frame see-through in dark mode instead of white.
+          srcDoc={`<meta name="color-scheme" content="light dark"><base target="_blank"><style>body{margin:0}</style>${searchSuggestions}`}
+        />
+      )}
+    </div>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // The browser refused the clipboard; the text can still be selected by hand.
+    }
+  }
+
+  return (
+    <div className="message-tools">
+      <button
+        type="button"
+        className="icon-button tiny"
+        aria-label={copied ? "Copied" : "Copy the reply"}
+        title={copied ? "Copied" : "Copy the reply"}
+        onClick={() => void copy()}
+      >
+        {copied ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+      </button>
+    </div>
+  );
+}
+
+/** A file's contents as base64, for sending in the message's JSON. */
+function base64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+    reader.onerror = () => reject(reader.error ?? new Error("The file couldn't be read."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
