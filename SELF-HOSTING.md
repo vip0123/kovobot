@@ -95,12 +95,11 @@ Keep `SIGN_UP_OPEN=false` on a server. Otherwise anyone who finds your address c
 
 ## Computers
 
-A Computer is a Linux desktop with Firefox that one Bot has. You watch it live from the Bot's page, and you can take over the mouse and keyboard at any time. Bots driving their Computers themselves comes next.
+A Computer is a Linux desktop with Firefox that one Bot has. The Bot uses it through its Driver model, an OpenAI, Anthropic or Google model you pick on the Bot's page; ask it to do something that needs a browser and it hands the task to the Driver model, which works on the screen and reports back. You watch it live from the Bot's page and can take over the mouse and keyboard at any time: the Bot waits until you hand back. It is told to stop and ask before paying, sending or deleting, on a best-effort basis.
 
-1. Add a key to `.env`, so the Bot service and the Computer service trust each other:
+1. Make up a key and add it to `.env`. It is a password the Bot service and the Computer service share, so nobody issues it: any random string of 32 characters or more. To make one, run `openssl rand -base64 32`, or `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"` where there's no `openssl`.
 
    ```sh
-   # openssl rand -base64 32
    COMPUTER_SERVICE_API_KEY=
    ```
 
@@ -111,11 +110,13 @@ A Computer is a Linux desktop with Firefox that one Bot has. You watch it live f
    ```
 
    The first start builds the desktop image, about 1.4 GB, which takes a few minutes.
-3. Open a Bot, choose **Create a Computer**, then **Watch live**.
+3. Open a Bot, choose **Create a Computer**, pick the model it uses the Computer with, then **Watch live**.
 
-- **Each Computer is a container on this machine,** with a Small Computer's CPU and memory. Shutting one down keeps its files. Deleting it, or its Bot, deletes them.
-- **What a Computer can reach.** Public internet addresses only: not your network or any other private address, so not Postgres or anything else this machine keeps to itself, and not mail servers on port 25.
+- **Each Computer is a container on this machine,** at the size you pick when you create it: Small, Medium, Large or XL. Only the sizes this machine's Docker can give are offered, and you can change a Computer's size while it runs.
+- **Asleep and Shut down.** A Computer with no one watching and no Bot at work goes Asleep after 15 minutes; you can pick up to 4 hours on the Bot's page. Asleep keeps its memory and uses no CPU, and Start wakes it. After 30 days Asleep it is Shut down, which keeps its files. Deleting it, or its Bot, deletes them.
+- **What a Computer can reach.** Public internet addresses only: not your network or any other private address, so not Postgres or anything else this machine keeps to itself, and not mail servers on port 25. It can send up to 50 Mbit/s and open 20 new connections a second; `COMPUTER_OUTBOUND_MBIT` and `COMPUTER_NEW_CONNECTIONS_PER_SECOND` in `.env` change that.
 - **Docker access.** The Computer service drives Docker through its socket, which gives it full control of Docker on this machine. Run it only where you'd run Docker yourself.
+- **Its licence.** The Computer service (`apps/computers`) carries the [Functional Source License](apps/computers/LICENSE.md): run it for yourself or your organisation, but not as a service that competes with Kovobot. Each version becomes Apache-2.0 two years after its release.
 
 ## Keep it running
 
@@ -131,4 +132,4 @@ A Computer is a Linux desktop with Firefox that one Bot has. You watch it live f
 
 ## What's not here yet
 
-Self-hosted Kovobot does what the hosted service does today: Bots, models and web chat, plus Linux Computers you watch and take over. Bots driving their Computers, Telegram, Discord and Slack, MCP tools, memory and schedules are on the [roadmap](README.md#roadmap).
+Self-hosted Kovobot does what the hosted service does today: Bots, models and web chat, plus Linux Computers that Bots drive and you watch and take over. Telegram, Discord and Slack, MCP tools, memory and schedules are on the [roadmap](README.md#roadmap).

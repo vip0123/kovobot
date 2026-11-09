@@ -470,3 +470,15 @@ textarea:focus-visible {
 .live-view-screen.in-control {
   outline-color: var(--danger);
 }
+
+.computer-driver {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* What the Bot is doing while it replies, such as using its Computer. */
+.bot-status {
+  margin-top: 6px;
+}

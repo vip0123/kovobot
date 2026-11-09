@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import WebSocket from "ws";
+import { sleepIdleComputers } from "../src/computer-sleep.ts";
 import { type Browser, startTestServer, uniqueEmail } from "./harness.ts";
 
 const server = startTestServer({}, { computers: true });
@@ -39,20 +40,48 @@ describe("a Bot's Computer", () => {
 
     const created = await browser.post(`/api/bots/${bot.id}/computer`);
     expect(created.status).toBe(201);
-    expect(await created.json()).toEqual({ computer: { state: "running" } });
+    expect(await created.json()).toEqual({ computer: { state: "running", size: "small", sleepAfterMinutes: 15, customerInControl: false } });
     expect([...server.computerService.computers.values()]).toContainEqual(expect.objectContaining({ owner: bot.id }));
 
     expect(await (await browser.post(`/api/bots/${bot.id}/computer/shut-down`)).json()).toEqual({
-      computer: { state: "shut_down" },
+      computer: { state: "shut_down", size: "small", sleepAfterMinutes: 15, customerInControl: false },
     });
-    expect(await computerOf(browser, bot)).toEqual({ state: "shut_down" });
+    expect(await computerOf(browser, bot)).toEqual({ state: "shut_down", size: "small", sleepAfterMinutes: 15, customerInControl: false });
     expect(await (await browser.post(`/api/bots/${bot.id}/computer/start`)).json()).toEqual({
-      computer: { state: "running" },
+      computer: { state: "running", size: "small", sleepAfterMinutes: 15, customerInControl: false },
     });
 
     expect((await deleteRequest(browser, `/api/bots/${bot.id}/computer`)).status).toBe(204);
     expect(await computerOf(browser, bot)).toBeNull();
     expect([...server.computerService.computers.values()]).not.toContainEqual(expect.objectContaining({ owner: bot.id }));
+  });
+
+  test("is created at the size the Customer picks, among those this machine can give, and can be resized", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    const sizes = await browser.get("/api/computer-sizes");
+    expect(((await sizes.json()) as { sizes: Array<{ size: string }> }).sizes.map((size) => size.size)).toEqual(["small", "medium"]);
+
+    const created = await browser.post(`/api/bots/${bot.id}/computer`, { size: "medium", sleepAfterMinutes: 15, customerInControl: false });
+    expect(await created.json()).toEqual({ computer: { state: "running", size: "medium", sleepAfterMinutes: 15, customerInControl: false } });
+
+    const resized = await browser.send(`/api/bots/${bot.id}/computer`, {
+      method: "PATCH",
+      headers: { origin: server.config.appUrl, "content-type": "application/json" },
+      body: JSON.stringify({ size: "small", sleepAfterMinutes: 15, customerInControl: false }),
+    });
+    expect(await resized.json()).toEqual({ computer: { state: "running", size: "small", sleepAfterMinutes: 15, customerInControl: false } });
+  });
+
+  test("a size that doesn't exist, or that this machine can't give, is refused", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    for (const [size, code] of [["huge", "invalid_size"], ["xl", "size_unavailable"]]) {
+      const response = await browser.post(`/api/bots/${bot.id}/computer`, { size });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code } });
+    }
+    expect(await computerOf(browser, bot)).toBeNull();
   });
 
   test("is one per Bot", async () => {
@@ -80,7 +109,7 @@ describe("a Bot's Computer", () => {
       expect(response.status).toBe(404);
       expect(await response.json()).toMatchObject({ error: { code: "bot_not_found" } });
     }
-    expect(await computerOf(owner, bot)).toEqual({ state: "running" });
+    expect(await computerOf(owner, bot)).toEqual({ state: "running", size: "small", sleepAfterMinutes: 15, customerInControl: false });
   });
 
   test("is deleted with its Bot", async () => {
@@ -116,7 +145,7 @@ describe("a Bot's Computer", () => {
     } finally {
       server.computerService.misrouted = false;
     }
-    expect(await computerOf(browser, bot)).toEqual({ state: "running" });
+    expect(await computerOf(browser, bot)).toEqual({ state: "running", size: "small", sleepAfterMinutes: 15, customerInControl: false });
   });
 
   test("is unavailable where no Computer service is set up", async () => {
@@ -166,6 +195,25 @@ describe("watching a Computer live", () => {
     socket.close();
   });
 
+  test("closes when the Customer signs out, or the Computer goes", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    await browser.post(`/api/bots/${bot.id}/computer`);
+
+    const signedOut = await watch(await liveViewLink(browser, bot), browser);
+    const closed = new Promise((resolve) => signedOut.socket.once("close", resolve));
+    await browser.post("/api/auth/sign-out");
+    await closed;
+
+    const other = await signedInBrowser();
+    const otherBot = await createBot(other);
+    await other.post(`/api/bots/${otherBot.id}/computer`);
+    const deleted = await watch(await liveViewLink(other, otherBot), other);
+    const deletedClosed = new Promise((resolve) => deleted.socket.once("close", resolve));
+    await deleteRequest(other, `/api/bots/${otherBot.id}/computer`);
+    await deletedClosed;
+  });
+
   test("a Computer that is shut down can't be watched", async () => {
     const browser = await signedInBrowser();
     const bot = await createBot(browser);
@@ -187,5 +235,114 @@ describe("watching a Computer live", () => {
     await expect(watch(link, owner, "https://evil.example")).rejects.toThrow("refused 403");
     await expect(watch(link, await signedInBrowser())).rejects.toThrow("refused 404");
     await expect(watch(link.replace(/token=[^&]+/, "token=made-up"), owner)).rejects.toThrow("refused 403");
+  });
+});
+
+function patchComputer(browser: Browser, bot: Bot, change: object) {
+  return browser.send(`/api/bots/${bot.id}/computer`, {
+    method: "PATCH",
+    headers: { origin: server.config.appUrl, "content-type": "application/json" },
+    body: JSON.stringify(change),
+  });
+}
+
+async function stateAfter(browser: Browser, bot: Bot, minutes: number): Promise<string> {
+  server.clock.advanceMinutes(minutes);
+  await sleepIdleComputers(server.deps);
+  return ((await computerOf(browser, bot)) as { state: string }).state;
+}
+
+describe("a Computer with nothing going on", () => {
+  test("goes Asleep after 15 minutes, and wakes when started", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    await browser.post(`/api/bots/${bot.id}/computer`);
+
+    expect(await stateAfter(browser, bot, 14)).toBe("running");
+    expect(await stateAfter(browser, bot, 2)).toBe("asleep");
+    expect(await (await browser.post(`/api/bots/${bot.id}/computer/start`)).json()).toMatchObject({ computer: { state: "running" } });
+    expect(await stateAfter(browser, bot, 14)).toBe("running");
+  });
+
+  test("stays awake while someone watches it live", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    await browser.post(`/api/bots/${bot.id}/computer`);
+    const { socket } = await watch(await liveViewLink(browser, bot), browser);
+
+    server.clock.advanceMinutes(20);
+    await new Promise((resolve) => setTimeout(resolve, 300)); // a few of the live view's checks
+    expect(await stateAfter(browser, bot, 0)).toBe("running");
+    socket.close();
+  });
+
+  test("sleeps after the time the Customer chooses, from 15 minutes to 4 hours", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    await browser.post(`/api/bots/${bot.id}/computer`);
+
+    expect(await (await patchComputer(browser, bot, { sleepAfterMinutes: 60 })).json()).toMatchObject({
+      computer: { sleepAfterMinutes: 60 },
+    });
+    expect(await stateAfter(browser, bot, 59)).toBe("running");
+    expect(await stateAfter(browser, bot, 2)).toBe("asleep");
+
+    for (const sleepAfterMinutes of [10, 241, "soon"]) {
+      const refused = await patchComputer(browser, bot, { sleepAfterMinutes });
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toMatchObject({ error: { code: "invalid_sleep_after" } });
+    }
+  });
+
+  test("is Shut down after 30 days Asleep, keeping its disk", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    await browser.post(`/api/bots/${bot.id}/computer`);
+    expect(await stateAfter(browser, bot, 16)).toBe("asleep");
+
+    // A month on, the browser's session has ended too, so the Computer service is asked directly.
+    const stateAt = async (minutes: number) => {
+      server.clock.advanceMinutes(minutes);
+      await sleepIdleComputers(server.deps);
+      return [...server.computerService.computers.values()].find((computer) => computer.owner === bot.id)?.state;
+    };
+    expect(await stateAt(29 * 24 * 60)).toBe("asleep");
+    expect(await stateAt(24 * 60)).toBe("shut_down");
+  });
+});
+
+describe("a Bot's Driver model", () => {
+  const patchBot = (browser: Browser, bot: Bot, change: object) =>
+    browser.send(`/api/bots/${bot.id}`, {
+      method: "PATCH",
+      headers: { origin: server.config.appUrl, "content-type": "application/json" },
+      body: JSON.stringify(change),
+    });
+
+  test("is picked by the Customer from OpenAI, Anthropic and Google models set up here, and can be cleared", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    expect(bot).toMatchObject({ driverModel: null });
+
+    expect(await (await patchBot(browser, bot, { driverModel: "claude-sonnet-5-5" })).json()).toMatchObject({
+      bot: { driverModel: "claude-sonnet-5-5", model: "gpt-6-luna" },
+    });
+    expect(await (await patchBot(browser, bot, { driverModel: "gpt-6-luna" })).json()).toMatchObject({ bot: { driverModel: "gpt-6-luna" } });
+    expect(await (await patchBot(browser, bot, { driverModel: null })).json()).toMatchObject({ bot: { driverModel: null } });
+  });
+
+  test("can't be an xAI or OpenRouter model, or one whose Model provider isn't set up here", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    for (const [driverModel, code] of [
+      ["grok-4.7", "not_a_driver_model"],
+      ["openrouter:anthropic/claude-sonnet-5-5", "not_a_driver_model"],
+      ["gemini-4-argon", "model_unavailable"],
+      ["no-such-model", "unknown_model"],
+    ]) {
+      const response = await patchBot(browser, bot, { driverModel });
+      expect(response.status, driverModel).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code } });
+    }
   });
 });

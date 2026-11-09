@@ -4,7 +4,8 @@ import type { Db } from "@kovobot/db";
 import { runTask } from "./agent.ts";
 import type { AppDeps } from "./app.ts";
 import { sessionCustomer } from "./auth/sessions.ts";
-import { computerRoutes, deleteBotComputer } from "./computer-routes.ts";
+import { computerRoutes, computerSizes, deleteBotComputer } from "./computer-routes.ts";
+import { driveComputer, drivingFor } from "./driver.ts";
 import type { Customer } from "./customers.ts";
 import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
 import type { ModelAdapters } from "./models/adapter.ts";
@@ -14,8 +15,13 @@ export interface Bot {
   id: string;
   name: string;
   model: string;
+  /** The model the Bot operates its Computer with; null until the Customer picks one. */
+  driverModel: string | null;
   createdAt: Date;
 }
+
+/** Driver models come only from the Model providers with a computer-use tool. */
+const DRIVER_PROVIDERS = new Set(["openai", "anthropic", "google"]);
 
 export interface Message {
   id: string;
@@ -39,7 +45,7 @@ const WINDOW_STEP = 20;
 export function botRoutes(deps: AppDeps) {
   const routes = new Hono<{ Variables: { customer: Customer } }>();
 
-  for (const path of ["/models", "/bots", "/bots/*"]) {
+  for (const path of ["/models", "/computer-sizes", "/bots", "/bots/*"]) {
     routes.use(path, async (c, next) => {
       const customer = await sessionCustomer(c, deps);
       if (!customer) return apiError(c, 401, "signed_out", "Sign in to continue.");
@@ -57,6 +63,8 @@ export function botRoutes(deps: AppDeps) {
     }),
   );
 
+  routes.get("/computer-sizes", computerSizes(deps));
+
   routes.get("/bots", async (c) => c.json({ bots: await listBots(deps.db, c.get("customer").id) }));
 
   routes.post("/bots", async (c) => {
@@ -69,15 +77,21 @@ export function botRoutes(deps: AppDeps) {
     return c.json({ bot }, 201);
   });
 
-  // Renames a Bot, or switches its model; its conversation stays as it is.
+  // Renames a Bot, switches its model or its Driver model; its conversation stays as it is.
   routes.patch("/bots/:id", async (c) => {
     const body = await jsonBody(c);
     const name = body.name === undefined ? undefined : botName(body.name);
     if (name === null) return invalidName(c);
     const model = body.model === undefined ? undefined : chooseModel(body.model, deps.models);
     if (model && "code" in model) return apiError(c, 400, model.code, model.message);
-    if (name === undefined && model === undefined) return invalidName(c);
-    const bot = await updateBot(deps.db, c.get("customer").id, c.req.param("id"), { name, model: model?.id });
+    const driver = body.driverModel === undefined || body.driverModel === null ? body.driverModel : chooseDriverModel(body.driverModel, deps.models);
+    if (driver && "code" in driver) return apiError(c, 400, driver.code, driver.message);
+    if (name === undefined && model === undefined && driver === undefined) return invalidName(c);
+    const bot = await updateBot(deps.db, c.get("customer").id, c.req.param("id"), {
+      name,
+      model: model?.id,
+      driverModel: driver === undefined ? undefined : (driver?.id ?? null),
+    });
     return bot ? c.json({ bot }) : botNotFound(c);
   });
 
@@ -133,7 +147,10 @@ export function botRoutes(deps: AppDeps) {
       };
       let reply = "";
       try {
-        for await (const event of runTask(adapter, { botName: bot.name, model: model.id, conversation })) {
+        const driving = await drivingFor(deps, bot.id);
+        const tools = driving ? { useComputer: (task: string) => driveComputer(deps, driving, task) } : undefined;
+        for await (const event of runTask(adapter, { botName: bot.name, model: model.id, conversation, tools })) {
+          if (event.type === "status") await send("status", { text: event.text });
           if (event.type !== "text") continue;
           reply += event.text;
           await send("delta", { text: event.text });
@@ -168,6 +185,15 @@ function chooseModel(id: unknown, adapters: ModelAdapters): ModelInfo | { code: 
   return model;
 }
 
+/** The Driver model a Bot is being set to, or why it can't be. */
+function chooseDriverModel(id: unknown, adapters: ModelAdapters): ModelInfo | { code: string; message: string } {
+  const listed = describeModel(id);
+  if (listed && !DRIVER_PROVIDERS.has(listed.provider)) {
+    return { code: "not_a_driver_model", message: "A Driver model comes from OpenAI, Anthropic or Google." };
+  }
+  return chooseModel(id, adapters);
+}
+
 function invalidName(c: Parameters<typeof apiError>[0]) {
   return apiError(c, 400, "invalid_name", `Give the Bot a name of up to ${MAX_NAME_LENGTH} characters.`);
 }
@@ -178,7 +204,7 @@ function botName(value: unknown): string | null {
   return name.length >= 1 && name.length <= MAX_NAME_LENGTH ? name : null;
 }
 
-const BOT_COLUMNS = `id, name, model, created_at AS "createdAt"`;
+const BOT_COLUMNS = `id, name, model, driver_model AS "driverModel", created_at AS "createdAt"`;
 
 async function listBots(db: Db, customerId: string): Promise<Bot[]> {
   const { rows } = await db.query<Bot>(
@@ -209,13 +235,14 @@ async function updateBot(
   db: Db,
   customerId: string,
   botId: string,
-  change: { name: string | undefined; model: string | undefined },
+  change: { name: string | undefined; model: string | undefined; driverModel?: string | null },
 ): Promise<Bot | null> {
   if (!UUID_PATTERN.test(botId)) return null;
   const { rows } = await db.query<Bot>(
-    `UPDATE bots SET name = COALESCE($3, name), model = COALESCE($4, model)
+    `UPDATE bots SET name = COALESCE($3, name), model = COALESCE($4, model),
+       driver_model = CASE WHEN $5 THEN $6 ELSE driver_model END
      WHERE id = $1 AND customer_id = $2 RETURNING ${BOT_COLUMNS}`,
-    [botId, customerId, change.name ?? null, change.model ?? null],
+    [botId, customerId, change.name ?? null, change.model ?? null, change.driverModel !== undefined, change.driverModel ?? null],
   );
   return rows[0] ?? null;
 }
@@ -247,7 +274,7 @@ const MESSAGE_COLUMNS = `id::text, role, content, created_at AS "createdAt"`;
 
 async function listMessages(db: Db, conversationId: string): Promise<Message[]> {
   const { rows } = await db.query<Message>(
-    `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id = $1 ORDER BY id`,
+    `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id = $1 ORDER BY messages.id`,
     [conversationId],
   );
   return rows;
@@ -265,7 +292,7 @@ async function recentMessages(db: Db, conversationId: string): Promise<Message[]
   );
   const start = Math.ceil(Math.max(0, counted[0]!.count - MESSAGES_SENT_TO_MODEL) / WINDOW_STEP) * WINDOW_STEP;
   const { rows } = await db.query<Message>(
-    `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id = $1 ORDER BY id OFFSET $2 LIMIT $3`,
+    `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id = $1 ORDER BY messages.id OFFSET $2 LIMIT $3`,
     [conversationId, start, MESSAGES_SENT_TO_MODEL],
   );
   while (rows[0]?.role === "assistant") rows.shift();

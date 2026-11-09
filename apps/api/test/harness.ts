@@ -37,7 +37,8 @@ export function startTestServer(
     beforeAll(async () => {
       await computerService.start();
       listening.server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" });
-      listening.server.on("upgrade", liveViewUpgrade(app, deps));
+      // Each open live view checks every 100 ms that its viewer may still watch.
+      listening.server.on("upgrade", liveViewUpgrade(app, deps, { recheckMs: 100 }));
       await new Promise((resolve) => listening.server!.once("listening", resolve));
       listening.url = `http://127.0.0.1:${(listening.server.address() as AddressInfo).port}`;
     });

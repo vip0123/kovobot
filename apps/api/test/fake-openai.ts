@@ -8,9 +8,11 @@ export const FAKE_OPENAI_KEY = "test-openai-key";
 export interface ResponsesRequest {
   model: string;
   instructions?: string;
-  input: Array<{ role: string; content: string }>;
+  input: Array<Record<string, unknown>>;
   stream?: boolean;
   store?: boolean;
+  tools?: unknown[];
+  include?: string[];
 }
 
 /**
@@ -29,6 +31,12 @@ export class FakeOpenAI {
     | { kind: "fail"; status: number } = { kind: "reply", deltas: ["Hello!"] };
   private gate: Promise<void> | undefined;
   private server: Server | undefined;
+  private extraOutput: object[] = [];
+
+  /** The next reply's output also carries these items, such as a function_call or a computer_call. */
+  addOutput(...items: object[]): void {
+    this.extraOutput = items;
+  }
 
   /** The next reply streams in these pieces. */
   replyWith(...deltas: string[]): void {
@@ -79,6 +87,8 @@ export class FakeOpenAI {
     const body = JSON.parse(await readBody(request)) as ResponsesRequest;
     this.requests.push(body);
     const next = this.next;
+    const extraOutput = this.extraOutput;
+    this.extraOutput = [];
     const gate = this.gate;
     this.gate = undefined;
     await gate;
@@ -119,6 +129,7 @@ export class FakeOpenAI {
             status: "completed",
             content: [{ type: "output_text", text: next.deltas.join(""), annotations: [] }],
           },
+          ...extraOutput,
         ],
         usage: {
           input_tokens: 12,

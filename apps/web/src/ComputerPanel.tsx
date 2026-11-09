@@ -1,6 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import type RFB from "@novnc/novnc";
-import { api, type Bot, type Computer, errorMessage } from "./api.ts";
+import { api, type Bot, type Computer, type ComputerSize, errorMessage, type ModelCatalog } from "./api.ts";
+
+/** Driver models come only from the Model providers with a computer-use tool. */
+const DRIVER_PROVIDERS = new Set(["openai", "anthropic", "google"]);
+
+/** The idle times a Customer can pick before their Computer goes Asleep. */
+const SLEEP_CHOICES = [
+  { minutes: 15, label: "15 minutes" },
+  { minutes: 30, label: "30 minutes" },
+  { minutes: 60, label: "1 hour" },
+  { minutes: 120, label: "2 hours" },
+  { minutes: 240, label: "4 hours" },
+];
 
 const STATE_LABELS: Record<Computer["state"], string> = {
   running: "Running",
@@ -11,17 +23,27 @@ const STATE_LABELS: Record<Computer["state"], string> = {
 /** A Bot's Computer: create, start, shut down or delete it, and watch it live or take over. */
 export function ComputerPanel({
   bot,
+  catalog,
   computer,
   onChange,
+  onBotChange,
 }: {
   bot: Bot;
+  catalog: ModelCatalog;
   computer: Computer | null;
   onChange: (computer: Computer | null) => void;
+  onBotChange: (bot: Bot) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [watching, setWatching] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [sizes, setSizes] = useState<ComputerSize[]>([]);
+  const [size, setSize] = useState("small");
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.computerSizes().then(({ sizes }) => setSizes(sizes), () => setSizes([]));
+  }, []);
 
   async function act(action: () => Promise<Computer | null>) {
     setBusy(true);
@@ -38,7 +60,22 @@ export function ComputerPanel({
     }
   }
 
-  const create = () => act(async () => (await api.createComputer(bot.id)).computer);
+  const create = () => act(async () => (await api.createComputer(bot.id, size)).computer);
+  const resize = (next: string) => act(async () => (await api.resizeComputer(bot.id, next)).computer);
+  const setSleep = (minutes: number) => act(async () => (await api.setComputerSleep(bot.id, minutes)).computer);
+  const drivers = catalog.models.filter((model) => DRIVER_PROVIDERS.has(model.provider) && model.available);
+  async function setDriver(driverModel: string) {
+    setError(null);
+    try {
+      onBotChange((await api.setDriverModel(bot.id, driverModel || null)).bot);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+  const sizeLabel = (name: string) => {
+    const spec = sizes.find((candidate) => candidate.size === name);
+    return spec ? `${spec.name}: ${spec.vcpus} CPUs, ${spec.memoryGb} GB` : name;
+  };
   const start = () => act(async () => (await api.startComputer(bot.id)).computer);
   const shutDown = () => act(async () => (await api.shutDownComputer(bot.id)).computer);
   const remove = () => act(async () => (await api.deleteComputer(bot.id), null));
@@ -48,9 +85,49 @@ export function ComputerPanel({
       <div className="computer-head">
         <h2>Computer</h2>
         <span className="muted small">
-          {computer ? STATE_LABELS[computer.state] : `None yet: a Linux desktop ${bot.name} can work on.`}
+          {computer
+            ? `${STATE_LABELS[computer.state]} · ${sizeLabel(computer.size)}`
+            : `None yet: a Linux desktop ${bot.name} can work on.`}
         </span>
         <div className="actions">
+          {sizes.length > 1 && (
+            <>
+              <label htmlFor="computer-size" className="visually-hidden">
+                Size
+              </label>
+              <select
+                id="computer-size"
+                value={computer ? computer.size : size}
+                disabled={busy}
+                onChange={(event) => (computer ? resize(event.target.value) : setSize(event.target.value))}
+              >
+                {sizes.map((option) => (
+                  <option key={option.size} value={option.size}>
+                    {sizeLabel(option.size)}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+          {computer && (
+            <>
+              <label htmlFor="computer-sleep" className="muted small">
+                Sleeps after
+              </label>
+              <select
+                id="computer-sleep"
+                value={computer.sleepAfterMinutes}
+                disabled={busy}
+                onChange={(event) => setSleep(Number(event.target.value))}
+              >
+                {SLEEP_CHOICES.map((choice) => (
+                  <option key={choice.minutes} value={choice.minutes}>
+                    {choice.label}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
           {!computer && (
             <button type="button" className="button primary small" disabled={busy} onClick={create}>
               {busy ? "Creating…" : "Create a Computer"}
@@ -88,6 +165,21 @@ export function ComputerPanel({
             ))}
         </div>
       </div>
+      {computer && (
+        <div className="computer-driver">
+          <label htmlFor="driver-model" className="muted small">
+            {bot.name} uses it with
+          </label>
+          <select id="driver-model" value={bot.driverModel ?? ""} onChange={(event) => void setDriver(event.target.value)}>
+            <option value="">No Driver model: {bot.name} can't use it yet</option>
+            {drivers.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       {watching && computer?.state === "running" && <LiveView botId={bot.id} />}
       {error && (
         <p className="alert" role="alert">
@@ -142,12 +234,31 @@ function Screen({ botId, onReconnect }: { botId: string; onReconnect: () => void
     };
   }, [botId]);
 
-  function toggleControl() {
+  // A take-over is a lease: renewed while this view holds it, handed back when the view goes,
+  // so a Bot never waits on a tab that was closed.
+  useEffect(() => {
+    if (!inControl) return;
+    const renew = setInterval(() => void api.setComputerControl(botId, true).catch(() => {}), 20_000);
+    return () => {
+      clearInterval(renew);
+      void api.setComputerControl(botId, false).catch(() => {});
+    };
+  }, [inControl, botId]);
+
+  // Taking control tells the Bot to wait; handing back lets it carry on.
+  async function toggleControl() {
     const rfb = viewer.current;
     if (!rfb) return;
-    rfb.viewOnly = inControl;
-    if (!inControl) rfb.focus();
-    setInControl(!inControl);
+    const taking = !inControl;
+    try {
+      await api.setComputerControl(botId, taking);
+    } catch (caught) {
+      setError(errorMessage(caught));
+      return;
+    }
+    rfb.viewOnly = !taking;
+    if (taking) rfb.focus();
+    setInControl(taking);
   }
 
   return (
@@ -155,11 +266,12 @@ function Screen({ botId, onReconnect }: { botId: string; onReconnect: () => void
       <div className="live-view-bar">
         <span className="muted small">
           {status === "connecting" && "Connecting…"}
-          {status === "connected" && (inControl ? "You're in control of the mouse and keyboard." : "Watching live.")}
+          {status === "connected" &&
+            (inControl ? "You have the mouse and keyboard; the Bot waits until you hand back." : "Watching live.")}
           {status === "disconnected" && (error ?? "The live view closed.")}
         </span>
         {status === "connected" && (
-          <button type="button" className="button secondary small" onClick={toggleControl}>
+          <button type="button" className="button secondary small" onClick={() => void toggleControl()}>
             {inControl ? "Hand back" : "Take over"}
           </button>
         )}

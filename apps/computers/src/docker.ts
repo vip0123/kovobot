@@ -1,18 +1,31 @@
 import Docker from "dockerode";
 import type { ComputerServiceConfig } from "@kovobot/config";
-import { COMPUTER_SIZES } from "@kovobot/plans";
+import { COMPUTER_SIZES, type ComputerSize, computerSize } from "@kovobot/plans";
 import { AGENT_PORT, type BackendComputer, type ComputerBackend, type ComputerState } from "./backend.ts";
 
 const AGENT_PORT_KEY = `${AGENT_PORT}/tcp`;
 const GIB = 1024 ** 3;
-/** Every local Computer gets the Small size until Computers have sizes to pick (tickets 25, 26). */
-const SIZE = COMPUTER_SIZES.find((size) => size.size === "small")!;
+
+/** A size's CPUs and memory as Docker limits them; no swap, so memory is what the size says. */
+function limits(size: ComputerSize) {
+  const spec = computerSize(size);
+  return { NanoCpus: spec.vcpus * 1e9, Memory: spec.memoryGb * GIB, MemorySwap: spec.memoryGb * GIB };
+}
+
+/** The size whose limits a container has; Docker is the record. */
+function sizeOf(hostConfig: Docker.HostConfig): ComputerSize {
+  const match = COMPUTER_SIZES.find((spec) => spec.vcpus * 1e9 === hostConfig.NanoCpus && spec.memoryGb * GIB === hostConfig.Memory);
+  return match?.size ?? "small";
+}
 
 /**
  * Computers as local Docker containers, one each, with a volume for the home directory.
  * Docker is the only record: labels name each Computer and its owner.
  */
-export function createDockerBackend(settings: ComputerServiceConfig["docker"]): ComputerBackend {
+export function createDockerBackend(
+  settings: ComputerServiceConfig["docker"],
+  outbound: ComputerServiceConfig["outbound"],
+): ComputerBackend {
   const docker = new Docker(connection(settings.host));
   const container = (id: string) => docker.getContainer(containerName(id));
 
@@ -20,15 +33,26 @@ export function createDockerBackend(settings: ComputerServiceConfig["docker"]): 
     const info = await container(id).inspect().catch(notFoundAs(null));
     if (!info) return null;
     const agentToken = info.Config.Env.find((entry) => entry.startsWith("KOVOBOT_AGENT_TOKEN="))?.split("=")[1] ?? "";
-    return { id, owner: info.Config.Labels["kovobot.owner"] ?? "", state: stateOf(info.State), agentToken };
+    return {
+      id,
+      owner: info.Config.Labels["kovobot.owner"] ?? "",
+      state: stateOf(info.State),
+      size: sizeOf(info.HostConfig),
+      agentToken,
+    };
   }
 
   return {
-    async create({ id, owner, agentToken }) {
+    async create({ id, owner, agentToken, size }) {
       const created = await docker.createContainer({
         name: containerName(id),
         Image: settings.image,
-        Env: [`KOVOBOT_AGENT_TOKEN=${agentToken}`],
+        Env: [
+          `KOVOBOT_AGENT_TOKEN=${agentToken}`,
+          // Applied by the Computer's start-up, as root, before the desktop runs.
+          `KOVOBOT_OUTBOUND_MBIT=${outbound.mbitPerSecond}`,
+          `KOVOBOT_NEW_CONNECTIONS_PER_SECOND=${outbound.newConnectionsPerSecond}`,
+        ],
         Labels: { "kovobot.computer": id, "kovobot.owner": owner },
         ExposedPorts: { [AGENT_PORT_KEY]: {} },
         HostConfig: {
@@ -38,8 +62,7 @@ export function createDockerBackend(settings: ComputerServiceConfig["docker"]): 
           ...(settings.network
             ? { NetworkMode: settings.network }
             : { PortBindings: { [AGENT_PORT_KEY]: [{ HostIp: "127.0.0.1", HostPort: "" }] } }),
-          NanoCpus: SIZE.vcpus * 1e9,
-          Memory: SIZE.memoryGb * GIB,
+          ...limits(size),
           ShmSize: GIB / 2,
           SecurityOpt: ["no-new-privileges"],
           // For the Computer's own firewall, which its start-up sets as root before the desktop runs.
@@ -58,13 +81,29 @@ export function createDockerBackend(settings: ComputerServiceConfig["docker"]): 
       else await container(id).start().catch(ignoreStatus(304));
     },
 
+    async sleep(id) {
+      const info = await container(id).inspect();
+      if (info.State.Running && !info.State.Paused) await container(id).pause();
+    },
+
     async shutDown(id) {
+      const info = await container(id).inspect();
+      if (info.State.Paused) await container(id).unpause();
       await container(id).stop({ t: 10 }).catch(ignoreStatus(304));
     },
 
     async remove(id) {
       await container(id).remove({ force: true }).catch(ignoreStatus(404));
       await docker.getVolume(containerName(id)).remove().catch(ignoreStatus(404));
+    },
+
+    async resize(id, size) {
+      await container(id).update(limits(size));
+    },
+
+    async capacity() {
+      const info = await docker.info();
+      return { vcpus: info.NCPU, memoryGb: info.MemTotal / GIB };
     },
 
     async agentAddress(id) {

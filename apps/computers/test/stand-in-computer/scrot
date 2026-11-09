@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stands in for scrot: writes a 1x1 PNG to the path it is given last.
+for path in "$@"; do :; done
+printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==' | base64 -d > "$path"

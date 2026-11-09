@@ -28,7 +28,7 @@ async function call(adapter: ModelAdapter, model: string): Promise<{ pieces: str
   let usage: ModelUsage[] | undefined;
   for await (const event of adapter.stream({ model, instructions: "You are Scout.", conversation })) {
     if (event.type === "text") pieces.push(event.text);
-    else usage = event.usage;
+    else if (event.type === "done") usage = event.usage;
   }
   expect(usage, "a done event").not.toBeUndefined();
   return { pieces, usage: usage! };

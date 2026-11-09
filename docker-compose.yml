@@ -44,6 +44,8 @@ services:
       COMPUTER_SERVICE_URL: http://computers:3100
       COMPUTER_SERVICE_API_KEY: ${COMPUTER_SERVICE_API_KEY:-}
       COMPUTER_IMAGE: kovobot-computer
+      COMPUTER_OUTBOUND_MBIT: ${COMPUTER_OUTBOUND_MBIT:-50}
+      COMPUTER_NEW_CONNECTIONS_PER_SECOND: ${COMPUTER_NEW_CONNECTIONS_PER_SECOND:-20}
       # Computers join only this network: they reach the internet, and this service
       # reaches their Computer agents, but they can't reach Postgres or the Bot service.
       COMPUTER_DOCKER_NETWORK: kovobot-computers

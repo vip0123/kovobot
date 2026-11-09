@@ -25,7 +25,7 @@ beforeAll(async () => {
     { cwd: new URL("..", import.meta.url) },
   );
   const config = loadComputerServiceConfig({ COMPUTER_SERVICE_API_KEY: KEY, COMPUTER_IMAGE: STAND_IN_IMAGE });
-  const service = createComputerService({ config, backend: createDockerBackend(config.docker), now: () => clock.now });
+  const service = createComputerService({ config, backend: createDockerBackend(config.docker, config.outbound), now: () => clock.now });
   server = serve({ fetch: service.app.fetch, port: 0, hostname: "127.0.0.1" });
   server.on("upgrade", service.upgrade);
   await new Promise((resolve) => server.once("listening", resolve));
@@ -53,10 +53,11 @@ interface Computer {
   id: string;
   owner: string;
   state: string;
+  size: string;
 }
 
-async function createComputer(owner = "bot-test"): Promise<Computer> {
-  const response = await call("/v1/computers", { method: "POST", json: { owner } });
+async function createComputer(owner = "bot-test", size?: string): Promise<Computer> {
+  const response = await call("/v1/computers", { method: "POST", json: { owner, size } });
   expect(response.status).toBe(201);
   const { computer } = (await response.json()) as { computer: Computer };
   created.push(computer.id);
@@ -107,14 +108,83 @@ describe("the Computer service", { timeout: 60_000 }, () => {
     expect(await gone.json()).toMatchObject({ error: { code: "computer_not_found" } });
   });
 
-  test("a Computer that is Asleep starts again", async () => {
+  test("a Computer goes Asleep, wakes when started, and can be Shut down from Asleep", async () => {
     const computer = await createComputer();
-    await promisify(execFile)("docker", ["pause", `kovobot-computer-${computer.id}`]);
+    const asleep = await call(`/v1/computers/${computer.id}/sleep`, { method: "POST" });
+    expect(await asleep.json()).toMatchObject({ computer: { state: "asleep" } });
     expect(await (await call(`/v1/computers/${computer.id}`)).json()).toMatchObject({ computer: { state: "asleep" } });
 
     const started = await call(`/v1/computers/${computer.id}/start`, { method: "POST" });
     expect(started.status).toBe(200);
     expect(await started.json()).toMatchObject({ computer: { state: "running" } });
+
+    await call(`/v1/computers/${computer.id}/sleep`, { method: "POST" });
+    const shutDown = await call(`/v1/computers/${computer.id}/shut-down`, { method: "POST" });
+    expect(await shutDown.json()).toMatchObject({ computer: { state: "shut_down" } });
+  });
+
+  test("a Computer is Small unless asked for a size this machine can give, and can be resized while it runs", async () => {
+    const sizes = ((await (await call("/v1/sizes")).json()) as { sizes: Array<{ size: string; vcpus: number; memoryGb: number }> }).sizes;
+    expect(sizes.map((size) => size.size)).toContain("small");
+    expect(sizes).toContainEqual({ size: "small", name: "Small", vcpus: 2, memoryGb: 4 });
+
+    expect(await createComputer()).toMatchObject({ size: "small" });
+    const listed = sizes.at(-1)!.size;
+    const computer = await createComputer("bot-sized", listed);
+    expect(computer).toMatchObject({ size: listed, state: "running" });
+
+    const resized = await call(`/v1/computers/${computer.id}`, { method: "PATCH", json: { size: "small" } });
+    expect(await resized.json()).toMatchObject({ computer: { size: "small", state: "running" } });
+    expect(await (await call(`/v1/computers/${computer.id}`)).json()).toMatchObject({ computer: { size: "small" } });
+  });
+
+  test("a size that doesn't exist, or that this machine can't give, is refused", async () => {
+    const unknown = await call("/v1/computers", { method: "POST", json: { owner: "bot-test", size: "huge" } });
+    expect(unknown.status).toBe(400);
+    expect(await unknown.json()).toMatchObject({ error: { code: "invalid_size" } });
+
+    const listed = ((await (await call("/v1/sizes")).json()) as { sizes: Array<{ size: string }> }).sizes.map((s) => s.size);
+    const tooBig = ["small", "medium", "large", "xl"].find((size) => !listed.includes(size));
+    if (tooBig) {
+      const refused = await call("/v1/computers", { method: "POST", json: { owner: "bot-test", size: tooBig } });
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toMatchObject({ error: { code: "size_unavailable" } });
+    }
+  });
+
+  test("the Computer agent carries out actions and takes screenshots", async () => {
+    const computer = await createComputer();
+    const act = (action: object) => call(`/v1/computers/${computer.id}/actions`, { method: "POST", json: action });
+
+    expect((await act({ type: "move", x: 640, y: 400 })).status).toBe(200);
+    expect(await (await act({ type: "cursor_position" })).json()).toEqual({ cursor: { x: 640, y: 400 } });
+    for (const action of [
+      { type: "click", x: 10, y: 20, button: "left", count: 2 },
+      { type: "type", text: "hello, world" },
+      { type: "keys", keys: "ctrl+shift+t" },
+      { type: "scroll", x: 100, y: 100, dx: 0, dy: -3 },
+      { type: "drag", path: [[1, 1], [50, 60]] },
+      { type: "wait", ms: 10 },
+    ]) {
+      expect((await act(action)).status, JSON.stringify(action)).toBe(200);
+    }
+
+    const screenshot = await call(`/v1/computers/${computer.id}/screenshot`);
+    expect(screenshot.headers.get("content-type")).toBe("image/png");
+    expect(Buffer.from(await screenshot.arrayBuffer()).subarray(1, 4).toString()).toBe("PNG");
+  });
+
+  test("an action off the screen or out of the ordinary is refused", async () => {
+    const computer = await createComputer();
+    for (const action of [
+      { type: "click", x: 5000, y: 10, button: "left", count: 1 },
+      { type: "keys", keys: "ctrl+c; echo pwned" },
+      { type: "launch_missiles" },
+    ]) {
+      const response = await call(`/v1/computers/${computer.id}/actions`, { method: "POST", json: action });
+      expect(response.status, JSON.stringify(action)).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: "invalid_action" } });
+    }
   });
 
   test("a Computer needs an owner", async () => {

@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { type Context, Hono } from "hono";
 import { type RawData, type WebSocket, WebSocketServer } from "ws";
 import type { ComputerServiceConfig } from "@kovobot/config";
+import { COMPUTER_SIZES, type ComputerSize, type ComputerSizeSpec } from "@kovobot/plans";
 import type { BackendComputer, ComputerBackend } from "./backend.ts";
 
 export interface ComputerServiceDeps {
@@ -40,13 +41,33 @@ export function createComputerService(deps: ComputerServiceDeps) {
     await next();
   });
 
+  /** The sizes this machine can give one Computer. */
+  async function sizesHere(): Promise<ComputerSizeSpec[]> {
+    const capacity = await backend.capacity();
+    return COMPUTER_SIZES.filter((size) => size.vcpus <= capacity.vcpus && size.memoryGb <= capacity.memoryGb);
+  }
+
+  /** The size asked for, if it exists and fits here; otherwise the refusal to send. */
+  async function chooseSize(c: Context, raw: unknown): Promise<ComputerSize | Response> {
+    const spec = COMPUTER_SIZES.find((size) => size.size === raw);
+    if (!spec) return apiError(c, 400, "invalid_size", `Pick a size: ${COMPUTER_SIZES.map((size) => size.size).join(", ")}.`);
+    if (!(await sizesHere()).includes(spec)) {
+      return apiError(c, 400, "size_unavailable", `This machine can't give a Computer ${spec.vcpus} CPUs and ${spec.memoryGb} GB.`);
+    }
+    return spec.size;
+  }
+
+  app.get("/v1/sizes", async (c) => c.json({ sizes: await sizesHere() }));
+
   app.post("/v1/computers", async (c) => {
-    const body: unknown = await c.req.json().catch(() => null);
-    const owner = body && typeof body === "object" && "owner" in body && typeof body.owner === "string" ? body.owner.trim() : "";
+    const body = await jsonObject(c);
+    const owner = typeof body.owner === "string" ? body.owner.trim() : "";
     if (!owner || owner.length > MAX_OWNER_LENGTH) {
       return apiError(c, 400, "invalid_owner", `Name the Computer's owner, in up to ${MAX_OWNER_LENGTH} characters.`);
     }
-    const computer = await backend.create({ id: randomUUID(), owner, agentToken: randomBytes(32).toString("base64url") });
+    const size = await chooseSize(c, body.size ?? "small");
+    if (size instanceof Response) return size;
+    const computer = await backend.create({ id: randomUUID(), owner, agentToken: randomBytes(32).toString("base64url"), size });
     return c.json({ computer: view(computer) }, 201);
   });
 
@@ -63,14 +84,67 @@ export function createComputerService(deps: ComputerServiceDeps) {
     return c.json({ computer: view((await backend.find(computer.id))!) });
   }));
 
+  app.post("/v1/computers/:id/sleep", withComputer(async (c, computer) => {
+    await backend.sleep(computer.id);
+    return c.json({ computer: view((await backend.find(computer.id))!) });
+  }));
+
   app.post("/v1/computers/:id/shut-down", withComputer(async (c, computer) => {
     await backend.shutDown(computer.id);
+    return c.json({ computer: view((await backend.find(computer.id))!) });
+  }));
+
+  app.patch("/v1/computers/:id", withComputer(async (c, computer) => {
+    const size = await chooseSize(c, (await jsonObject(c)).size);
+    if (size instanceof Response) return size;
+    await backend.resize(computer.id, size);
     return c.json({ computer: view((await backend.find(computer.id))!) });
   }));
 
   app.delete("/v1/computers/:id", withComputer(async (c, computer) => {
     await backend.remove(computer.id);
     return c.body(null, 204);
+  }));
+
+  /**
+   * Calls this Computer's agent, waiting a little for one that is still starting. It retries
+   * only while the agent can't be reached, so an action is never carried out twice.
+   */
+  async function callAgent(computer: BackendComputer, method: "GET" | "POST", path: string, body?: unknown): Promise<Response | null> {
+    const deadline = Date.now() + AGENT_WAIT_MS;
+    while (Date.now() < deadline) {
+      const address = await backend.agentAddress(computer.id);
+      if (!address) return null;
+      try {
+        return await fetch(`http://${address.host}:${address.port}${path}`, {
+          method,
+          headers: { authorization: `Bearer ${computer.agentToken}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+      } catch {
+        await sleep(250);
+      }
+    }
+    return null;
+  }
+
+  const forRunningComputer = (handle: (c: Context, computer: BackendComputer) => Promise<Response>) =>
+    withComputer(async (c, computer) =>
+      computer.state === "running" ? handle(c, computer) : apiError(c, 409, "computer_not_running", "Start the Computer first."),
+    );
+  const unreachable = (c: Context) => apiError(c, 503, "computer_unreachable", "The Computer isn't answering. Try again in a moment.");
+
+  // One action from the common set the Driver models' actions map onto; the agent checks it.
+  app.post("/v1/computers/:id/actions", forRunningComputer(async (c, computer) => {
+    const answer = await callAgent(computer, "POST", "/actions", await jsonObject(c));
+    if (!answer) return unreachable(c);
+    return new Response(answer.body, { status: answer.status, headers: { "content-type": "application/json" } });
+  }));
+
+  app.get("/v1/computers/:id/screenshot", forRunningComputer(async (c, computer) => {
+    const answer = await callAgent(computer, "GET", "/screenshot");
+    if (!answer?.ok) return unreachable(c);
+    return new Response(answer.body, { status: 200, headers: { "content-type": "image/png" } });
   }));
 
   // A link the Bot service hands to the Customer's browser, good for one Computer and one minute.
@@ -152,7 +226,13 @@ export function createComputerService(deps: ComputerServiceDeps) {
 
 /** What the Bot service sees of a Computer; never its agent's token. */
 function view(computer: BackendComputer) {
-  return { id: computer.id, owner: computer.owner, state: computer.state };
+  return { id: computer.id, owner: computer.owner, state: computer.state, size: computer.size };
+}
+
+/** The request's JSON object body, or {} when there is none. */
+async function jsonObject(c: Context): Promise<Record<string, unknown>> {
+  const body: unknown = await c.req.json().catch(() => null);
+  return body && typeof body === "object" ? (body as Record<string, unknown>) : {};
 }
 
 /** Carries the live view both ways: WebSocket messages to the agent's bytes, and back. */
