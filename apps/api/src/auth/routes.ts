@@ -27,8 +27,18 @@ export function authRoutes(deps: AppDeps) {
     const email = normaliseEmail((await jsonBody(c)).email);
     if (!email) return apiError(c, 400, "invalid_email", "Enter a valid email address.");
     // The answer is the same either way, so it never reveals who is a Customer.
-    if (!signUpOpen && !(await findCustomerByEmail(deps.db, email))) await joinWaitlist(deps, email);
-    else await sendSignInLink(deps, email);
+    if (!signUpOpen && !(await findCustomerByEmail(deps.db, email))) {
+      await joinWaitlist(deps, email);
+      return c.json({}, 202);
+    }
+    try {
+      await sendSignInLink(deps, email);
+    } catch (error) {
+      console.error("The sign-in email couldn't be sent", error);
+      // While sign-up is closed only Customers get an email, so saying it failed would reveal one.
+      if (!signUpOpen) return c.json({}, 202);
+      return apiError(c, 503, "email_failed", "We couldn't send the sign-in email just now. Try again in a moment.");
+    }
     return c.json({}, 202);
   });
 

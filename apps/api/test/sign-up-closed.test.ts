@@ -41,6 +41,17 @@ describe("while sign-up is closed", () => {
     expect(await currentCustomer(browser)).toMatchObject({ email });
   });
 
+  test("a sign-in email that fails to send gets the same answer as the waitlist, so it reveals no Customer", async () => {
+    const email = uniqueEmail();
+    await findOrCreateCustomerByEmail(server.deps.db, email);
+    server.mail.down = true;
+    try {
+      expect((await server.browser().post("/api/auth/email-link", { email })).status).toBe(202);
+    } finally {
+      server.mail.down = false;
+    }
+  });
+
   test("Google can't create a Customer; the visitor joins the waitlist instead", async () => {
     const browser = server.browser();
     const account = googleAccount();

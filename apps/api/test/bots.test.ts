@@ -181,6 +181,26 @@ describe("chatting on the web Channel", () => {
     expect(events.at(-1)).toMatchObject({ event: "error", data: { code: "model_failed" } });
     expect(await history(browser, bot)).toMatchObject([{ role: "user", content: "Hello?" }]);
   });
+
+  test("a key the Model provider refuses is named, since trying again won't help", async () => {
+    const browser = await signedInBrowser();
+    const gpt = await createBot(browser);
+    const claude = await createBot(browser, "Scribe", "claude-sonnet-5-5");
+    server.openai.failWith(401);
+    server.anthropic.endNextReply({ kind: "fail", status: 403 });
+
+    const fromOpenAI = await chat(browser, gpt, "Hello?");
+    const fromAnthropic = await chat(browser, claude, "Hello?");
+
+    expect(fromOpenAI.at(-1)).toMatchObject({
+      event: "error",
+      data: { code: "model_key_refused", message: expect.stringMatching(/^OpenAI refused .*OPENAI_API_KEY/) },
+    });
+    expect(fromAnthropic.at(-1)).toMatchObject({
+      event: "error",
+      data: { code: "model_key_refused", message: expect.stringMatching(/^Anthropic refused .*ANTHROPIC_API_KEY/) },
+    });
+  });
 });
 
 describe("keeping a conversation sound", () => {

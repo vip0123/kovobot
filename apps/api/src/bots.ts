@@ -8,7 +8,7 @@ import { computerRoutes, computerSizes, deleteBotComputer } from "./computer-rou
 import { driveComputer, drivingFor } from "./driver.ts";
 import type { Customer } from "./customers.ts";
 import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
-import type { ModelAdapters } from "./models/adapter.ts";
+import { type ModelAdapters, ModelError, type ModelProvider } from "./models/adapter.ts";
 import { describeModel, MODELS, type ModelInfo } from "./models/catalog.ts";
 
 export interface Bot {
@@ -163,7 +163,12 @@ export function botRoutes(deps: AppDeps) {
         console.error(`Bot ${bot.id}: the model call failed`, error);
         // Keep what the Customer already saw, so a reload shows the same conversation.
         if (reply) await addMessage(deps.db, conversationId, "assistant", reply, deps.now());
-        await send("error", { code: "model_failed", message: "The model didn't answer. Try again in a moment." });
+        await send(
+          "error",
+          error instanceof ModelError && error.keyRefused
+            ? keyRefused(deps, model)
+            : { code: "model_failed", message: "The model didn't answer. Try again in a moment." },
+        );
       } finally {
         await stopReplying(deps.db, conversationId);
       }
@@ -171,6 +176,31 @@ export function botRoutes(deps: AppDeps) {
   });
 
   return routes;
+}
+
+/** Each Model provider's name, and the setting its key comes from (packages/config). */
+const KEY_SETTINGS: Record<ModelProvider, { provider: string; setting: string }> = {
+  openai: { provider: "OpenAI", setting: "OPENAI_API_KEY" },
+  anthropic: { provider: "Anthropic", setting: "ANTHROPIC_API_KEY" },
+  google: { provider: "Google", setting: "GEMINI_API_KEY" },
+  xai: { provider: "xAI", setting: "XAI_API_KEY" },
+  openrouter: { provider: "OpenRouter", setting: "OPENROUTER_API_KEY" },
+  local: { provider: "The local model server", setting: "OPENAI_COMPATIBLE_BASE_URL" },
+};
+
+/**
+ * What to say when the Model provider refused the key. Self-hosted, the key is the Operator's
+ * setting, so name it; hosted, it's ours, so the Customer just hears the model is unavailable.
+ */
+function keyRefused(deps: AppDeps, model: ModelInfo) {
+  if (deps.config.mode === "hosted") {
+    return { code: "model_unavailable", message: `${model.name} isn't available right now. Pick another model, or try later.` };
+  }
+  const { provider, setting } = KEY_SETTINGS[model.provider];
+  return {
+    code: "model_key_refused",
+    message: `${provider} refused this Kovobot's key, so trying again won't help. Whoever runs it needs to fix ${setting} and restart.`,
+  };
 }
 
 function botNotFound(c: Parameters<typeof apiError>[0]) {

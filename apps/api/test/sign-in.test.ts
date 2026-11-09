@@ -78,6 +78,21 @@ describe("sign-in by email link", () => {
     expect(await response.json()).toMatchObject({ error: { code: "invalid_email" } });
     expect(server.outbox.length).toBe(sentBefore);
   });
+
+  test("when the sign-in email can't be sent, the page hears so and asking again works", async () => {
+    const email = uniqueEmail();
+    server.mail.down = true;
+    try {
+      const failed = await server.browser().post("/api/auth/email-link", { email });
+      expect(failed.status).toBe(503);
+      expect(await failed.json()).toMatchObject({ error: { code: "email_failed" } });
+    } finally {
+      server.mail.down = false;
+    }
+
+    expect((await server.browser().post("/api/auth/email-link", { email })).status).toBe(202);
+    expect(server.lastEmailTo(email)).toBeDefined();
+  });
 });
 
 describe("sessions", () => {
