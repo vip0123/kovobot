@@ -30,7 +30,16 @@ export interface TaskTools {
  */
 export async function* runTask(
   adapter: ModelAdapter,
-  task: { botName: string; model: string; conversation: ChatMessage[]; tools?: TaskTools },
+  task: {
+    botName: string;
+    model: string;
+    conversation: ChatMessage[];
+    tools?: TaskTools;
+    /** How hard the model thinks; what it thinks streams as "thinking" events. */
+    thinking?: "normal" | "deep";
+    /** Whether the model may search the web; its sources come back as a "sources" event. */
+    webSearch?: boolean;
+  },
 ): AsyncGenerator<TaskEvent> {
   const tools = task.tools?.useComputer ? [USE_COMPUTER] : undefined;
   const conversation: ConversationItem[] = [...task.conversation];
@@ -42,6 +51,8 @@ export async function* runTask(
       instructions: botInstructions(task.botName, tools !== undefined),
       conversation,
       tools,
+      thinking: task.thinking,
+      webSearch: task.webSearch,
     })) {
       if (event.type === "tool_call") calls.push(event.call);
       if (event.type === "done") turn = event.turn;

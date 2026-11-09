@@ -17,7 +17,7 @@ export function createModelAdapters({
     anthropic: anthropic ? createAnthropicAdapter({ apiKey: anthropic, workspaceId: anthropicWorkspaceId }) : null,
     google: google ? createGoogleAdapter({ apiKey: google }) : null,
     // xAI documents the OpenAI SDK against its own Responses API.
-    xai: xai ? createOpenAIAdapter({ apiKey: xai, baseURL: "https://api.x.ai/v1" }) : null,
+    xai: xai ? createOpenAIAdapter({ apiKey: xai, baseURL: "https://api.x.ai/v1", reasoningOptions: false }) : null,
     openrouter: openrouter
       ? createOpenAICompatibleAdapter({ apiKey: openrouter, baseURL: "https://openrouter.ai/api/v1" })
       : null,

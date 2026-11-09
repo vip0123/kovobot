@@ -13,6 +13,8 @@ export interface ResponsesRequest {
   store?: boolean;
   tools?: unknown[];
   include?: string[];
+  reasoning?: { summary?: string; effort?: string };
+  max_tool_calls?: number;
 }
 
 /**
@@ -33,9 +35,22 @@ export class FakeOpenAI {
   private server: Server | undefined;
   private extraOutput: object[] = [];
 
+  private thoughts: string[] = [];
+  private sources: Array<{ url: string; title: string }> = [];
+
   /** The next reply's output also carries these items, such as a function_call or a computer_call. */
   addOutput(...items: object[]): void {
     this.extraOutput = items;
+  }
+
+  /** The next reply first streams these pieces of its reasoning summary. */
+  thinkFirst(...pieces: string[]): void {
+    this.thoughts = pieces;
+  }
+
+  /** The next reply's text cites these web pages, as url_citation annotations. */
+  citeSources(...sources: Array<{ url: string; title: string }>): void {
+    this.sources = sources;
   }
 
   /** The next reply streams in these pieces. */
@@ -89,6 +104,10 @@ export class FakeOpenAI {
     const next = this.next;
     const extraOutput = this.extraOutput;
     this.extraOutput = [];
+    const thoughts = this.thoughts;
+    const sources = this.sources;
+    this.thoughts = [];
+    this.sources = [];
     const gate = this.gate;
     this.gate = undefined;
     await gate;
@@ -105,6 +124,9 @@ export class FakeOpenAI {
       response.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: sequence++, ...fields })}\n\n`);
 
     send("response.created", { response: { id, object: "response", status: "in_progress", model: body.model, output: [] } });
+    for (const delta of thoughts) {
+      send("response.reasoning_summary_text.delta", { item_id: "rs_1", output_index: 0, summary_index: 0, delta });
+    }
     for (const delta of next.deltas) {
       send("response.output_text.delta", { item_id: "msg_1", output_index: 0, content_index: 0, delta, logprobs: [] });
     }
@@ -122,12 +144,22 @@ export class FakeOpenAI {
         status: "completed",
         model: body.model,
         output: [
+          ...(thoughts.length > 0
+            ? [{ type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: thoughts.join("") }], encrypted_content: "fake" }]
+            : []),
+          ...(sources.length > 0 ? [{ type: "web_search_call", id: "ws_1", status: "completed", action: { type: "search", query: "fake query" } }] : []),
           {
             type: "message",
             id: "msg_1",
             role: "assistant",
             status: "completed",
-            content: [{ type: "output_text", text: next.deltas.join(""), annotations: [] }],
+            content: [
+              {
+                type: "output_text",
+                text: next.deltas.join(""),
+                annotations: sources.map((source) => ({ type: "url_citation", start_index: 0, end_index: 0, ...source })),
+              },
+            ],
           },
           ...extraOutput,
         ],

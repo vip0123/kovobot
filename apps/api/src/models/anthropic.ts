@@ -9,10 +9,12 @@ import {
   type ComputerAction,
   type ComputerStep,
   type ConversationItem,
+  MAX_SEARCHES_PER_CALL,
   type ModelAdapter,
   ModelError,
   type ModelEvent,
   type ModelUsage,
+  type WebSource,
 } from "./adapter.ts";
 import { xdotoolKeys } from "./computer-keys.ts";
 
@@ -21,6 +23,8 @@ const MODELS_WITH_FALLBACK = new Set(["claude-fable-5-1", "claude-opus-5-5", "cl
 /** Anthropic's computer-use tool; its actions arrive as tool_use blocks named after each action. */
 const COMPUTER_TOOLSET = "computer_toolset_20260801";
 const COMPUTER = "computer";
+/** Anthropic's web search server tool, the newest version. */
+const WEB_SEARCH_TOOL = "web_search_20260318" as const;
 
 /** Anthropic's Messages API, through the official SDK (ADR 0005), with prompt caching on. */
 export function createAnthropicAdapter({
@@ -42,7 +46,7 @@ export function createAnthropicAdapter({
   });
 
   return {
-    async *stream({ model, instructions, conversation, tools, computer }) {
+    async *stream({ model, instructions, conversation, tools, computer, thinking, webSearch }) {
       // The answering attempt: the model asked for, or the one that stood in when it declined.
       const answering: ModelUsage = {
         model,
@@ -66,6 +70,8 @@ export function createAnthropicAdapter({
         ...(computer
           ? [{ type: COMPUTER_TOOLSET, configs: { zoom: { enabled: false }, hold_key: { enabled: false } } } as BetaToolUnion]
           : []),
+        // Anthropic's web search runs on its side; the reply cites what it found.
+        ...(webSearch ? [{ type: WEB_SEARCH_TOOL, name: "web_search" as const, max_uses: MAX_SEARCHES_PER_CALL }] : []),
       ];
       try {
         const stream = client.beta.messages.stream({
@@ -76,6 +82,9 @@ export function createAnthropicAdapter({
           ...(toolUnion.length > 0 ? { tools: toolUnion } : {}),
           // Caches the conversation so far, so the next message reads it back at the cache rate.
           cache_control: { type: "ephemeral" },
+          // The model decides when and how much to think; a summary of it streams back.
+          ...(thinking ? { thinking: { type: "adaptive" as const, display: "summarized" as const } } : {}),
+          ...(thinking === "deep" ? { output_config: { effort: "xhigh" as const } } : {}),
           ...(MODELS_WITH_FALLBACK.has(model)
             ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }
             : {}),
@@ -92,6 +101,7 @@ export function createAnthropicAdapter({
             }
             case "content_block_delta":
               if (event.delta.type === "text_delta") yield { type: "text", text: event.delta.text };
+              if (event.delta.type === "thinking_delta") yield { type: "thinking", text: event.delta.thinking };
               break;
             case "message_delta": {
               answering.outputTokens = event.usage.output_tokens;
@@ -119,10 +129,33 @@ export function createAnthropicAdapter({
       // Every model asked declined: still billed, so the error carries what they used.
       if (stopReason === "refusal") throw new ModelError("The model declined to answer.", { usage });
       if (stopReason === null) throw new ModelError("Anthropic's reply was cut off.");
+      const sources = webSources(content);
+      if (sources.length > 0) yield { type: "sources", sources };
       yield* calls(content);
       yield { type: "done", usage, turn: content };
     },
   };
+}
+
+/**
+ * The pages a reply draws on: those its text cites, or, when it cites none, those its
+ * searches found. Each page once, in the order it first appears.
+ */
+function webSources(content: BetaContentBlock[]): WebSource[] {
+  const cited: WebSource[] = [];
+  const found: WebSource[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      for (const citation of block.citations ?? []) {
+        if (citation.type === "web_search_result_location") cited.push({ url: citation.url, title: citation.title ?? citation.url });
+      }
+    }
+    if (block.type === "web_search_tool_result" && Array.isArray(block.content)) {
+      for (const result of block.content) found.push({ url: result.url, title: result.title });
+    }
+  }
+  const pages = cited.length > 0 ? cited : found;
+  return pages.filter((page, index) => pages.findIndex((other) => other.url === page.url) === index);
 }
 
 /** The model's calls in its answer: our function tools' calls, and its turn on the Computer. */
@@ -198,6 +231,20 @@ function toMessage(item: ConversationItem): BetaMessageParam {
   switch (item.role) {
     case "user":
     case "assistant":
+      if (item.attachments?.length) {
+        // Files first, then the words, as Anthropic advises; no empty text block for files alone.
+        return {
+          role: item.role,
+          content: [
+            ...item.attachments.map((file): BetaContentBlockParam =>
+              file.mediaType === "application/pdf"
+                ? { type: "document", source: { type: "base64", media_type: file.mediaType, data: file.data }, title: file.name }
+                : { type: "image", source: { type: "base64", media_type: file.mediaType, data: file.data } },
+            ),
+            ...(item.content ? [{ type: "text" as const, text: item.content }] : []),
+          ],
+        };
+      }
       return {
         role: item.role,
         content: item.screenshot

@@ -44,6 +44,106 @@ async function history(browser: Browser, bot: Bot) {
   return ((await response.json()) as { messages: Array<{ role: string; content: string }> }).messages;
 }
 
+/** Sends a message with options (thinking harder, web search, attachments) and returns the reply's events. */
+async function send(browser: Browser, bot: Bot, body: Record<string, unknown>) {
+  const response = await browser.post(`/api/bots/${bot.id}/messages`, body);
+  expect(response.status).toBe(200);
+  return serverSentEvents(response);
+}
+
+const dataOf = (events: Array<{ event: string; data: unknown }>, name: string) =>
+  events.filter((event) => event.event === name).map((event) => event.data as Record<string, unknown>);
+
+describe("thinking, shown in chat", () => {
+  test("the Bot's thinking streams before its reply and stays with it; asked to think harder, it does", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    server.openai.thinkFirst("Let me ", "count.");
+    server.openai.replyWith("Three.");
+
+    const events = await chat(browser, bot, "How many r's in strawberry?");
+
+    expect(dataOf(events, "thinking")).toEqual([{ text: "Let me " }, { text: "count." }]);
+    expect(server.openai.requests.at(-1)!.reasoning).toEqual({ summary: "auto" });
+    expect(dataOf(events, "done")[0]).toMatchObject({ message: { content: "Three.", thinking: "Let me count." } });
+    expect(await history(browser, bot)).toMatchObject([
+      { role: "user", content: "How many r's in strawberry?", thinking: null },
+      { role: "assistant", content: "Three.", thinking: "Let me count." },
+    ]);
+
+    await send(browser, bot, { content: "Count again, carefully.", thinkHarder: true });
+    expect(server.openai.requests.at(-1)!.reasoning).toEqual({ summary: "auto", effort: "high" });
+  });
+});
+
+describe("web search", () => {
+  const SOURCES = [
+    { url: "https://nodejs.org/en/blog/release", title: "Node.js releases" },
+    { url: "https://github.com/nodejs/node/releases", title: "Releases · nodejs/node" },
+  ];
+
+  test("a message can ask the Bot to search the web; the sources come with its reply and stay with it", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    expect(await (await browser.get("/api/models")).json()).toMatchObject({ webSearch: ["openai", "anthropic"] });
+    server.openai.citeSources(...SOURCES);
+    server.openai.replyWith("Node 26 is current.");
+
+    const events = await send(browser, bot, { content: "Which Node.js is current?", webSearch: true });
+
+    expect(server.openai.requests.at(-1)!.tools).toEqual([{ type: "web_search" }]);
+    expect(dataOf(events, "sources")).toEqual([{ sources: SOURCES }]);
+    expect(await history(browser, bot)).toMatchObject([
+      { role: "user", sources: null },
+      { role: "assistant", content: "Node 26 is current.", sources: SOURCES, searchSuggestions: null },
+    ]);
+
+    await chat(browser, bot, "Thanks.");
+    expect(server.openai.requests.at(-1)).not.toHaveProperty("tools");
+  });
+
+  test("a model whose Model provider has no web search here says so, and nothing is sent", async () => {
+    const local = startTestServer({}, { local: true });
+    const browser = local.browser();
+    await local.signInByEmail(browser, uniqueEmail());
+    const created = await browser.post("/api/bots", { name: "Scout", model: "local:qwen3" });
+    const bot = ((await created.json()) as { bot: Bot }).bot;
+    const before = local.chatCompletions.requests.length;
+
+    const response = await browser.post(`/api/bots/${bot.id}/messages`, { content: "Search, please.", webSearch: true });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "web_search_unavailable" } });
+    expect(local.chatCompletions.requests.length).toBe(before);
+  });
+});
+
+describe("web search, hosted", () => {
+  // Hosted Bots run on our keys, and a search has no price yet (ADR 0009), so none is offered.
+  const hosted = startTestServer({
+    KOVOBOT_MODE: "hosted",
+    // Required hosted; the harness's mail never leaves the test.
+    SMTP_HOST: "smtp.example.com",
+    EMAIL_FROM: "Kovobot <hello@example.com>",
+    API_URL: "https://app.example.com",
+    APP_URL: "https://app.example.com",
+    SIGN_UP_OPEN: "true",
+  });
+
+  test("is off until it has a price: the models say so, and a message asking for it is refused", async () => {
+    const browser = hosted.browser();
+    await hosted.signInByEmail(browser, uniqueEmail());
+    expect(await (await browser.get("/api/models")).json()).toMatchObject({ webSearch: [] });
+    const created = await browser.post("/api/bots", { name: "Scout", model: "gpt-6-luna" });
+    const bot = ((await created.json()) as { bot: Bot }).bot;
+
+    const response = await browser.post(`/api/bots/${bot.id}/messages`, { content: "Search, please.", webSearch: true });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "web_search_unavailable" } });
+  });
+});
+
 describe("Bots", () => {
   test("a Customer creates as many Bots as they like, renames one and deletes another", async () => {
     const browser = await signedInBrowser();
@@ -404,5 +504,99 @@ describe("a Bot whose Model provider's key was removed after it was set up", () 
     expect(await (await patchBot(browser, bot, { model: "claude-haiku-5-5" }, keyless)).json()).toMatchObject({
       bot: { model: "claude-haiku-5-5" },
     });
+  });
+});
+
+describe("attachments", () => {
+  const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==";
+  const PDF = Buffer.from("%PDF-1.4\n1 0 obj << >> endobj\ntrailer << >>\n%%EOF\n").toString("base64");
+  const NOTES = Buffer.from("# Notes\nBuy milk.").toString("base64");
+  type Sent = { id: string; role: string; attachments: Array<{ id: string; name: string; mediaType: string; size: number }> };
+
+  test("images and PDFs reach the model as themselves and text files as text; the Conversation keeps them", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+
+    const events = await send(browser, bot, {
+      content: "Summarise these.",
+      attachments: [
+        { name: "photo.png", data: PNG },
+        { name: "report.pdf", data: PDF },
+        { name: "notes.md", data: NOTES },
+      ],
+    });
+
+    expect(events.at(-1)!.event).toBe("done");
+    expect(server.openai.requests.at(-1)!.input.at(-1)).toEqual({
+      role: "user",
+      content: [
+        { type: "input_text", text: 'Summarise these.\n\n<file name="notes.md">\n# Notes\nBuy milk.\n</file>' },
+        { type: "input_image", image_url: `data:image/png;base64,${PNG}`, detail: "auto" },
+        { type: "input_file", filename: "report.pdf", file_data: `data:application/pdf;base64,${PDF}` },
+      ],
+    });
+    const [sent] = (await history(browser, bot)) as unknown as Sent[];
+    expect(sent).toMatchObject({
+      role: "user",
+      content: "Summarise these.",
+      attachments: [
+        { name: "photo.png", mediaType: "image/png", size: Buffer.from(PNG, "base64").length },
+        { name: "report.pdf", mediaType: "application/pdf" },
+        { name: "notes.md", mediaType: "text/plain" },
+      ],
+    });
+
+    const photo = await browser.get(`/api/bots/${bot.id}/attachments/${sent!.attachments[0]!.id}`);
+    expect(photo.status).toBe(200);
+    expect(photo.headers.get("content-type")).toBe("image/png");
+    expect(photo.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(Buffer.from(await photo.arrayBuffer()).toString("base64")).toBe(PNG);
+
+    // Later messages still show the model the files.
+    await chat(browser, bot, "And the report?");
+    expect(JSON.stringify(server.openai.requests.at(-1)!.input)).toContain("report.pdf");
+  });
+
+  test("a message of files alone is fine", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    const events = await send(browser, bot, { content: "", attachments: [{ name: "photo.png", data: PNG }] });
+    expect(events.at(-1)!.event).toBe("done");
+  });
+
+  test("files it can't take are refused, saying why, before any model call", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    const before = server.openai.requests.length;
+    const refused = async (attachments: unknown) => {
+      const response = await browser.post(`/api/bots/${bot.id}/messages`, { content: "Look.", attachments });
+      expect(response.status).toBe(400);
+      return ((await response.json()) as { error: { code: string; message: string } }).error;
+    };
+
+    expect(await refused(Array.from({ length: 6 }, (_, n) => ({ name: `${n}.png`, data: PNG })))).toMatchObject({
+      code: "invalid_attachments",
+      message: expect.stringMatching(/5 files/),
+    });
+    const binary = Buffer.from([0, 1, 2, 3, 255, 254, 0, 9]).toString("base64");
+    expect(await refused([{ name: "program.exe", data: binary }])).toMatchObject({
+      code: "invalid_attachments",
+      message: expect.stringMatching(/program\.exe/),
+    });
+    const hugeImage = Buffer.concat([Buffer.from(PNG, "base64"), Buffer.alloc(5 * 1024 * 1024)]).toString("base64");
+    expect(await refused([{ name: "big.png", data: hugeImage }])).toMatchObject({ message: expect.stringMatching(/big\.png/) });
+    expect(await refused([{ name: "", data: "" }])).toMatchObject({ code: "invalid_attachments" });
+    expect(server.openai.requests.length).toBe(before);
+  });
+
+  test("a Bot's files are its Customer's alone", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    await send(browser, bot, { content: "Mine.", attachments: [{ name: "photo.png", data: PNG }] });
+    const [sent] = (await history(browser, bot)) as unknown as Sent[];
+
+    const stranger = await signedInBrowser();
+    const response = await stranger.get(`/api/bots/${bot.id}/attachments/${sent!.attachments[0]!.id}`);
+    expect(response.status).toBe(404);
   });
 });

@@ -33,12 +33,32 @@ abstract class FakeModelServer {
   protected deltas: string[] = ["Hello!"];
   private ending: Ending = { kind: "finish" };
   private server: Server | undefined;
+  private thoughts: string[] = [];
+  private sources: FakeSource[] = [];
   /** The endings this Model provider's API can produce. */
   protected abstract readonly endings: ReadonlySet<Ending["kind"]>;
 
   /** The next replies stream in these pieces. */
   replyWith(...deltas: string[]): void {
     this.deltas = deltas;
+  }
+
+  /** The next reply first streams these pieces of the model's thinking, as the Model provider shows it. */
+  thinkFirst(...pieces: string[]): void {
+    this.thoughts = pieces;
+  }
+
+  /** The next reply cites these web pages, as the Model provider's web search does. */
+  citeSources(...sources: FakeSource[]): void {
+    this.sources = sources;
+  }
+
+  /** What the next reply thinks and cites; each holds for one reply. */
+  protected takeExtras(): { thoughts: string[]; sources: FakeSource[] } {
+    const extras = { thoughts: this.thoughts, sources: this.sources };
+    this.thoughts = [];
+    this.sources = [];
+    return extras;
   }
 
   /** The next reply ends this way; see `Ending`. */
@@ -76,6 +96,12 @@ abstract class FakeModelServer {
     }
     this.respond(path, body, response, ending);
   }
+}
+
+/** A web page a fake's web search found and the reply cites. */
+export interface FakeSource {
+  url: string;
+  title: string;
 }
 
 /** A tool use the fake streams: one of our functions, or an action of the computer toolset. */
@@ -117,6 +143,7 @@ export class FakeAnthropic extends FakeModelServer {
         usage: { input_tokens: 20, cache_creation_input_tokens: 100, cache_read_input_tokens: 300, output_tokens: 1 },
       },
     });
+    const { thoughts, sources } = this.takeExtras();
     let index = 0;
     if (fallback) {
       send("content_block_start", {
@@ -125,8 +152,38 @@ export class FakeAnthropic extends FakeModelServer {
       });
       send("content_block_stop", { index: index++ });
     }
+    if (thoughts.length > 0) {
+      send("content_block_start", { index, content_block: { type: "thinking", thinking: "", signature: "" } });
+      for (const thinking of thoughts) send("content_block_delta", { index, delta: { type: "thinking_delta", thinking } });
+      send("content_block_delta", { index, delta: { type: "signature_delta", signature: "fake-signature" } });
+      send("content_block_stop", { index: index++ });
+    }
+    if (sources.length > 0) {
+      // The web search server tool: its use, its results, then a reply that cites them.
+      send("content_block_start", { index, content_block: { type: "server_tool_use", id: "srvtoolu_1", name: "web_search", input: {} } });
+      send("content_block_delta", { index, delta: { type: "input_json_delta", partial_json: JSON.stringify({ query: "fake query" }) } });
+      send("content_block_stop", { index: index++ });
+      send("content_block_start", {
+        index,
+        content_block: {
+          type: "web_search_tool_result",
+          tool_use_id: "srvtoolu_1",
+          content: sources.map((source) => ({ type: "web_search_result", ...source, encrypted_content: "fake", page_age: null })),
+        },
+      });
+      send("content_block_stop", { index: index++ });
+    }
     send("content_block_start", { index, content_block: { type: "text", text: "" } });
     for (const text of this.deltas) send("content_block_delta", { index, delta: { type: "text_delta", text } });
+    for (const source of sources) {
+      send("content_block_delta", {
+        index,
+        delta: {
+          type: "citations_delta",
+          citation: { type: "web_search_result_location", ...source, cited_text: "cited", encrypted_index: "fake" },
+        },
+      });
+    }
     if (ending.kind === "cut-off") {
       response.end();
       return;
@@ -194,12 +251,28 @@ export class FakeGemini extends FakeModelServer {
     const finishReason = ending.kind === "stop" ? ending.reason : ending.kind === "cut-off" ? null : "STOP";
     const calls = this.functionCalls;
     this.functionCalls = [];
+    const { thoughts, sources } = this.takeExtras();
+    for (const text of thoughts) send({ candidates: [{ content: { parts: [{ text, thought: true }], role: "model" }, index: 0 }] });
+    // Grounding with Google Search: its sources, and the search suggestions Google asks apps to show.
+    const groundingMetadata =
+      sources.length > 0
+        ? {
+            webSearchQueries: ["fake query"],
+            groundingChunks: sources.map((source) => ({ web: { uri: source.url, title: source.title } })),
+            searchEntryPoint: { renderedContent: '<div class="fake-suggestions">fake query</div>' },
+          }
+        : undefined;
     this.deltas.forEach((text, index) => {
       const last = index === this.deltas.length - 1;
       const callParts = last ? calls.map((call) => ({ functionCall: call })) : [];
       send({
         candidates: [
-          { content: { parts: [{ text }, ...callParts], role: "model" }, index: 0, ...(last && finishReason ? { finishReason } : {}) },
+          {
+            content: { parts: [{ text }, ...callParts], role: "model" },
+            index: 0,
+            ...(last && finishReason ? { finishReason } : {}),
+            ...(last && groundingMetadata ? { groundingMetadata } : {}),
+          },
         ],
         ...(last ? { usageMetadata } : {}),
       });
@@ -213,6 +286,8 @@ export class FakeChatCompletions extends FakeModelServer {
   protected readonly endings = new Set<Ending["kind"]>(["finish", "cut-off", "stop", "fail"]);
   /** The cost the server reports with usage, in US dollars, as OpenRouter does; null reports none. */
   costUsd: number | null = null;
+  /** Where thinking streams: OpenRouter's `reasoning`, or `reasoning_content` as some local servers send it. */
+  reasoningField: "reasoning" | "reasoning_content" = "reasoning";
   private toolCalls: Array<{ id: string; name: string; args: object }> = [];
 
   /** The next reply ends by calling these tools, their arguments streamed in two pieces each. */
@@ -230,8 +305,17 @@ export class FakeChatCompletions extends FakeModelServer {
       response.write(
         `data: ${JSON.stringify({ id: "gen-fake", object: "chat.completion.chunk", created: 0, model: body.model, ...chunk })}\n\n`,
       );
+    const { thoughts, sources } = this.takeExtras();
+    for (const thought of thoughts) {
+      send({ choices: [{ index: 0, delta: { role: "assistant", [this.reasoningField]: thought }, finish_reason: null }] });
+    }
     for (const content of this.deltas) {
       send({ choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: null }] });
+    }
+    if (sources.length > 0) {
+      // OpenRouter's web plugin: the sources arrive as url_citation annotations.
+      const annotations = sources.map((source) => ({ type: "url_citation", url_citation: { ...source, start_index: 0, end_index: 0 } }));
+      send({ choices: [{ index: 0, delta: { annotations }, finish_reason: null }] });
     }
     if (ending.kind === "cut-off") {
       response.end();

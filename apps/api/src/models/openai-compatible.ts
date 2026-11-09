@@ -1,6 +1,13 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { type ConversationItem, type ModelAdapter, ModelError, type ModelUsage } from "./adapter.ts";
+import {
+  type ConversationItem,
+  MAX_SEARCHES_PER_CALL,
+  type ModelAdapter,
+  ModelError,
+  type ModelUsage,
+  type WebSource,
+} from "./adapter.ts";
 
 /**
  * Any OpenAI-compatible Chat Completions API, through the OpenAI SDK: OpenRouter
@@ -13,7 +20,10 @@ export function createOpenAICompatibleAdapter({ apiKey, baseURL }: { apiKey: str
   const client = new OpenAI({ apiKey, baseURL, maxRetries: 0 });
 
   return {
-    async *stream({ model, instructions, conversation, tools }) {
+    async *stream({ model, instructions, conversation, tools, thinking, webSearch }) {
+      const viaOpenRouter = model.startsWith("openrouter:");
+      // The pages the reply cites, as OpenRouter's web plugin sends them; local servers have no web search.
+      const sources: WebSource[] = [];
       let usage: ModelUsage[] = [];
       let finishReason: string | null = null;
       let text = "";
@@ -27,6 +37,10 @@ export function createOpenAICompatibleAdapter({ apiKey, baseURL }: { apiKey: str
           stream_options: { include_usage: true },
           // OpenRouter adds its cost to the usage when asked; other servers ignore this.
           usage: { include: true },
+          // Reasoning models think anyway, and the reasoning streams back; thinking harder asks for more,
+          // OpenRouter in its own field, local servers in the field OpenAI-compatible servers take.
+          ...(thinking === "deep" ? (viaOpenRouter ? { reasoning: { effort: "high" } } : { reasoning_effort: "high" }) : {}),
+          ...(webSearch && viaOpenRouter ? { plugins: [{ id: "web", max_results: MAX_SEARCHES_PER_CALL }] } : {}),
           ...((tools ?? []).length > 0
             ? {
                 tools: tools!.map((tool) => ({
@@ -39,6 +53,16 @@ export function createOpenAICompatibleAdapter({ apiKey, baseURL }: { apiKey: str
         const chunks = await client.chat.completions.create(body as OpenAI.ChatCompletionCreateParamsStreaming);
         for await (const chunk of chunks) {
           const delta = chunk.choices[0]?.delta;
+          // OpenRouter streams reasoning as `reasoning`; some local servers as `reasoning_content`.
+          const extra = delta as
+            | { reasoning?: unknown; reasoning_content?: unknown; annotations?: Array<{ type?: string; url_citation?: { url?: string; title?: string } }> }
+            | undefined;
+          const reasoning = extra?.reasoning ?? extra?.reasoning_content;
+          if (typeof reasoning === "string" && reasoning) yield { type: "thinking", text: reasoning };
+          for (const annotation of extra?.annotations ?? []) {
+            const page = annotation.type === "url_citation" ? annotation.url_citation : undefined;
+            if (page?.url && !sources.some((source) => source.url === page.url)) sources.push({ url: page.url, title: page.title || page.url });
+          }
           if (delta?.content) {
             text += delta.content;
             yield { type: "text", text: delta.content };
@@ -75,6 +99,7 @@ export function createOpenAICompatibleAdapter({ apiKey, baseURL }: { apiKey: str
       if (finishReason === "content_filter") {
         throw new ModelError("The model server stopped the reply (content_filter).", { usage });
       }
+      if (sources.length > 0) yield { type: "sources", sources };
       for (const call of calls.filter(Boolean)) {
         let input: Record<string, unknown> = {};
         try {
@@ -100,8 +125,24 @@ export function createOpenAICompatibleAdapter({ apiKey, baseURL }: { apiKey: str
 function toMessages(item: ConversationItem): ChatCompletionMessageParam[] {
   switch (item.role) {
     case "user":
+      if (item.attachments?.length) {
+        return [
+          {
+            role: "user",
+            content: [
+              ...(item.content ? [{ type: "text" as const, text: item.content }] : []),
+              ...item.attachments.map((file) =>
+                file.mediaType === "application/pdf"
+                  ? { type: "file" as const, file: { filename: file.name, file_data: `data:${file.mediaType};base64,${file.data}` } }
+                  : { type: "image_url" as const, image_url: { url: `data:${file.mediaType};base64,${file.data}` } },
+              ),
+            ],
+          },
+        ];
+      }
+      return [{ role: "user", content: item.content }];
     case "assistant":
-      return [{ role: item.role, content: item.content }];
+      return [{ role: "assistant", content: item.content }];
     case "turn":
       return [item.raw as ChatCompletionMessageParam];
     case "tool_results":
