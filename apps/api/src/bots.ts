@@ -4,8 +4,9 @@ import type { Db } from "@kovobot/db";
 import { runTask } from "./agent.ts";
 import type { AppDeps } from "./app.ts";
 import { sessionCustomer } from "./auth/sessions.ts";
+import { computerRoutes, deleteBotComputer } from "./computer-routes.ts";
 import type { Customer } from "./customers.ts";
-import { apiError, jsonBody } from "./http.ts";
+import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
 import type { ModelAdapters } from "./models/adapter.ts";
 import { describeModel, MODELS, type ModelInfo } from "./models/catalog.ts";
 
@@ -33,7 +34,6 @@ const MESSAGES_SENT_TO_MODEL = 50;
  * the same, so Model providers read it back from their prompt cache.
  */
 const WINDOW_STEP = 20;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Bots, and chatting with them on the web Channel. Every route needs a signed-in Customer. */
 export function botRoutes(deps: AppDeps) {
@@ -82,9 +82,14 @@ export function botRoutes(deps: AppDeps) {
   });
 
   routes.delete("/bots/:id", async (c) => {
+    if (!(await deleteBotComputer(deps, c.get("customer").id, c.req.param("id")))) {
+      return apiError(c, 503, "computer_service_unavailable", "The Bot's Computer can't be deleted right now. Try again in a moment.");
+    }
     const deleted = await deleteBot(deps.db, c.get("customer").id, c.req.param("id"));
     return deleted ? c.body(null, 204) : botNotFound(c);
   });
+
+  routes.route("/bots/:id/computer", computerRoutes(deps));
 
   routes.get("/bots/:id/messages", async (c) => {
     const bot = await findBot(deps.db, c.get("customer").id, c.req.param("id"));

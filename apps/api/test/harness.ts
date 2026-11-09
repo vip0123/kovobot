@@ -1,14 +1,19 @@
 import { randomUUID } from "node:crypto";
+import type { AddressInfo } from "node:net";
+import { serve, type ServerType } from "@hono/node-server";
 import { afterAll, beforeAll, expect, inject } from "vitest";
 import { loadConfig, type Env } from "@kovobot/config";
 import { createDb } from "@kovobot/db";
 import { type AppDeps, createApp } from "../src/app.ts";
+import { createComputerServiceClient, type ComputerService } from "../src/computers.ts";
+import { liveViewUpgrade } from "../src/live-view.ts";
 import type { Email } from "../src/mailer.ts";
 import type { ModelAdapter, ModelAdapters } from "../src/models/adapter.ts";
 import { createAnthropicAdapter } from "../src/models/anthropic.ts";
 import { createOpenAIAdapter } from "../src/models/openai.ts";
 import { createOpenAICompatibleAdapter } from "../src/models/openai-compatible.ts";
 import { FakeGoogle, type FakeGoogleAccount } from "./fake-google.ts";
+import { FakeComputerService } from "./fake-computer-service.ts";
 import { FakeAnthropic, FakeChatCompletions } from "./fake-models.ts";
 import { FAKE_OPENAI_KEY, FakeOpenAI } from "./fake-openai.ts";
 
@@ -21,10 +26,26 @@ import { FAKE_OPENAI_KEY, FakeOpenAI } from "./fake-openai.ts";
  */
 export function startTestServer(
   env: Env = {},
-  options: { openai?: boolean; openrouter?: boolean; local?: boolean } = {},
+  options: { openai?: boolean; openrouter?: boolean; local?: boolean; computers?: boolean } = {},
 ) {
   const db = createDb(inject("databaseUrl"));
   afterAll(() => db.end());
+  // The Computer service, when on, and a real listening API in front of it: the live view is a WebSocket.
+  const computerService = new FakeComputerService();
+  const listening: { url: string; server?: ServerType } = { url: "" };
+  if (options.computers) {
+    beforeAll(async () => {
+      await computerService.start();
+      listening.server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" });
+      listening.server.on("upgrade", liveViewUpgrade(app, deps));
+      await new Promise((resolve) => listening.server!.once("listening", resolve));
+      listening.url = `http://127.0.0.1:${(listening.server.address() as AddressInfo).port}`;
+    });
+    afterAll(async () => {
+      await new Promise((resolve) => listening.server?.close(resolve));
+      await computerService.stop();
+    });
+  }
   const openai = new FakeOpenAI();
   const anthropic = new FakeAnthropic();
   const chatCompletions = new FakeChatCompletions();
@@ -74,6 +95,10 @@ export function startTestServer(
     mailer: { send: async (email) => void outbox.push(email) },
     fetch: google.fetch,
     models,
+    // The fake's address is known only once it listens, so the client is made on first use.
+    computers: options.computers
+      ? lazily(() => createComputerServiceClient({ url: computerService.baseUrl, apiKey: computerService.apiKey }))
+      : null,
     now: () => clock.now,
   };
   const app = createApp(deps);
@@ -88,6 +113,9 @@ export function startTestServer(
     openai,
     anthropic,
     chatCompletions,
+    computerService,
+    /** The API listening on a real port, for WebSockets; set once the tests start, with `computers` on. */
+    listening,
     /** A fresh browser: its own cookies, and the web app's Origin on every request. */
     browser: () => new Browser(app, config.appUrl),
     lastEmailTo,
@@ -114,6 +142,15 @@ export function startTestServer(
     expect(email, `an email to ${to}`).toBeDefined();
     return email!;
   }
+}
+
+/** A Computer service client made on first call. */
+function lazily(make: () => ComputerService): ComputerService {
+  let client: ComputerService | undefined;
+  return new Proxy({} as ComputerService, {
+    get: (_target, method: keyof ComputerService) => (...args: never[]) =>
+      ((client ??= make())[method] as (...args: never[]) => unknown)(...args),
+  });
 }
 
 /** The signed-in Customer, as the Bots page sees it. */

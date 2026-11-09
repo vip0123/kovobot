@@ -34,6 +34,11 @@ export interface Message {
   createdAt: string;
 }
 
+/** A Bot's Computer. Shut down keeps its disk; Asleep keeps its memory too. */
+export interface Computer {
+  state: "running" | "asleep" | "shut_down";
+}
+
 /** An error answer from the API: its machine-readable code and a sentence to show. */
 export class ApiError extends Error {
   readonly status: number;
@@ -95,6 +100,15 @@ export const api = {
   switchModel: (id: string, model: string) => request<{ bot: Bot }>(`/bots/${id}`, { method: "PATCH", json: { model } }),
   deleteBot: (id: string) => request<unknown>(`/bots/${id}`, { method: "DELETE" }),
   messages: (botId: string) => request<{ messages: Message[] }>(`/bots/${botId}/messages`),
+
+  computer: (botId: string) => request<{ computer: Computer | null }>(`/bots/${botId}/computer`),
+  createComputer: (botId: string) => request<{ computer: Computer }>(`/bots/${botId}/computer`, { method: "POST" }),
+  startComputer: (botId: string) => request<{ computer: Computer }>(`/bots/${botId}/computer/start`, { method: "POST" }),
+  shutDownComputer: (botId: string) =>
+    request<{ computer: Computer }>(`/bots/${botId}/computer/shut-down`, { method: "POST" }),
+  deleteComputer: (botId: string) => request<unknown>(`/bots/${botId}/computer`, { method: "DELETE" }),
+  /** A link to the Computer's live view, to open as a WebSocket within a minute. */
+  liveView: (botId: string) => request<{ url: string; expiresAt: string }>(`/bots/${botId}/computer/live-view`, { method: "POST" }),
 
   /**
    * Sends a message on the web Channel and streams the Bot's reply: `onText`

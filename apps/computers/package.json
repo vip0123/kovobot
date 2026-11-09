@@ -1,0 +1,20 @@
+{
+  "name": "@kovobot/computers",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=../../.env --watch src/main.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "@kovobot/config": "workspace:*",
+    "@kovobot/plans": "workspace:*",
+    "dockerode": "^5.0.1",
+    "hono": "^4.13.14",
+    "ws": "^8.22.1"
+  },
+  "devDependencies": {
+    "@types/dockerode": "^4.0.2",
+    "@types/ws": "^8.18.2"
+  }
+}

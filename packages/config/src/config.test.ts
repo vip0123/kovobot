@@ -197,3 +197,33 @@ describe("Model provider keys", () => {
     ]);
   });
 });
+
+describe("Computers", () => {
+  const key = "k".repeat(32);
+
+  test("are off until the Computer service's key is set; then the Bot service calls it at COMPUTER_SERVICE_URL", () => {
+    expect(loadConfig({}).config.computerService).toBeNull();
+    expect(loadConfig({ COMPUTER_SERVICE_API_KEY: key }).config.computerService).toEqual({
+      url: "http://localhost:3100",
+      apiKey: key,
+    });
+    expect(
+      loadConfig({ COMPUTER_SERVICE_API_KEY: key, COMPUTER_SERVICE_URL: "http://computers:3100/" }).config.computerService,
+    ).toEqual({ url: "http://computers:3100", apiKey: key });
+  });
+
+  test("are for self-hosted installs only, until hosted Computers run in the cloud and are billed", () => {
+    expect(configProblems({ ...hostedEnv, COMPUTER_SERVICE_API_KEY: key })).toEqual([
+      expect.stringMatching(/^COMPUTER_SERVICE_API_KEY is for self-hosted installs only/),
+    ]);
+  });
+
+  test("a short Computer service key or a malformed address is refused", () => {
+    expect(configProblems({ COMPUTER_SERVICE_API_KEY: "short" })).toEqual([
+      expect.stringMatching(/^COMPUTER_SERVICE_API_KEY must be at least 32 characters/),
+    ]);
+    expect(configProblems({ COMPUTER_SERVICE_API_KEY: key, COMPUTER_SERVICE_URL: "computers" })).toEqual([
+      'COMPUTER_SERVICE_URL must be a URL, not "computers".',
+    ]);
+  });
+});

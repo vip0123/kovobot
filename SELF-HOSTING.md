@@ -93,9 +93,33 @@ Keep `SIGN_UP_OPEN=false` on a server. Otherwise anyone who finds your address c
 
 **Sign in with Google.** Set `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`. The redirect URI to register with Google is your `KOVOBOT_URL` followed by `/api/auth/google/callback`.
 
+## Computers
+
+A Computer is a Linux desktop with Firefox that one Bot has. You watch it live from the Bot's page, and you can take over the mouse and keyboard at any time. Bots driving their Computers themselves comes next.
+
+1. Add a key to `.env`, so the Bot service and the Computer service trust each other:
+
+   ```sh
+   # openssl rand -base64 32
+   COMPUTER_SERVICE_API_KEY=
+   ```
+
+2. Start Kovobot with Computers:
+
+   ```sh
+   docker compose --profile computers up -d
+   ```
+
+   The first start builds the desktop image, about 1.4 GB, which takes a few minutes.
+3. Open a Bot, choose **Create a Computer**, then **Watch live**.
+
+- **Each Computer is a container on this machine,** with a Small Computer's CPU and memory. Shutting one down keeps its files. Deleting it, or its Bot, deletes them.
+- **What a Computer can reach.** Public internet addresses only: not your network or any other private address, so not Postgres or anything else this machine keeps to itself, and not mail servers on port 25.
+- **Docker access.** The Computer service drives Docker through its socket, which gives it full control of Docker on this machine. Run it only where you'd run Docker yourself.
+
 ## Keep it running
 
-- **Update.** Run `git pull && docker compose up -d --build`. Database migrations run each time Kovobot starts.
+- **Update.** Run `git pull && docker compose up -d --build`, adding `--profile computers` if you use Computers. Database migrations run each time Kovobot starts.
 - **Back up.** Bots and conversations are in Postgres. Save a copy with:
 
   ```sh
@@ -107,4 +131,4 @@ Keep `SIGN_UP_OPEN=false` on a server. Otherwise anyone who finds your address c
 
 ## What's not here yet
 
-Self-hosted Kovobot does what the hosted service does today: Bots, models and web chat. Telegram, Discord and Slack, MCP tools, memory, schedules and Computers (Linux, in local Docker) are on the [roadmap](README.md#roadmap).
+Self-hosted Kovobot does what the hosted service does today: Bots, models and web chat, plus Linux Computers you watch and take over. Bots driving their Computers, Telegram, Discord and Slack, MCP tools, memory and schedules are on the [roadmap](README.md#roadmap).

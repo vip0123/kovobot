@@ -19,6 +19,9 @@ services:
       # The address people open Kovobot at. The API serves the web app there, so both are one origin.
       API_URL: ${KOVOBOT_URL:-http://localhost:8080}
       APP_URL: ${KOVOBOT_URL:-http://localhost:8080}
+      # Computers, with --profile computers: the Computer service below, on its key from .env.
+      COMPUTER_SERVICE_URL: http://computers:3100
+      COMPUTER_SERVICE_API_KEY: ${COMPUTER_SERVICE_API_KEY:-}
     ports:
       # Only this machine can reach it; on a server, an https reverse proxy goes in front.
       - "127.0.0.1:8080:8080"
@@ -29,6 +32,40 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+
+  # Computers: docker compose --profile computers up -d (SELF-HOSTING.md). The Computer
+  # service starts each Computer as a container next to these, through Docker's socket.
+  computers:
+    profiles: [computers]
+    build:
+      context: .
+      dockerfile: apps/computers/Dockerfile
+    environment:
+      COMPUTER_SERVICE_URL: http://computers:3100
+      COMPUTER_SERVICE_API_KEY: ${COMPUTER_SERVICE_API_KEY:-}
+      COMPUTER_IMAGE: kovobot-computer
+      # Computers join only this network: they reach the internet, and this service
+      # reaches their Computer agents, but they can't reach Postgres or the Bot service.
+      COMPUTER_DOCKER_NETWORK: kovobot-computers
+      DOCKER_HOST: unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [default, computers]
+    depends_on:
+      computer-image:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Builds the image each Computer starts from, then exits.
+  computer-image:
+    profiles: [computers]
+    image: kovobot-computer
+    build:
+      context: apps/computers
+      dockerfile: image/Dockerfile
+    entrypoint: ["true"]
+    network_mode: none
+    restart: "no"
 
   # Port 54329 avoids clashing with any other Postgres on 5432.
   postgres:
@@ -50,3 +87,7 @@ services:
 
 volumes:
   kovobot-postgres:
+
+networks:
+  computers:
+    name: kovobot-computers

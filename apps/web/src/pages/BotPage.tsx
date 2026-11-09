@@ -1,6 +1,7 @@
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { api, type Bot, errorMessage, type Message, type ModelCatalog } from "../api.ts";
+import { api, ApiError, type Bot, type Computer, errorMessage, type Message, type ModelCatalog } from "../api.ts";
+import { ComputerPanel } from "../ComputerPanel.tsx";
 import { canUse, ModelPicker, modelLabel } from "../ModelPicker.tsx";
 import { AppShell } from "../AppShell.tsx";
 
@@ -14,6 +15,8 @@ function BotChat() {
   const [bot, setBot] = useState<Bot | null | undefined>(undefined);
   const [catalog, setCatalog] = useState<ModelCatalog>({ models: [], openrouter: false, local: false });
   const [messages, setMessages] = useState<Message[]>([]);
+  // undefined while loading, "off" where no Computer service is set up, null for none yet.
+  const [computer, setComputer] = useState<Computer | null | "off" | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -27,6 +30,10 @@ function BotChat() {
         setBot(null);
         setError(errorMessage(caught));
       },
+    );
+    api.computer(id).then(
+      ({ computer }) => setComputer(computer),
+      (caught: unknown) => setComputer(caught instanceof ApiError && caught.code === "computers_off" ? "off" : null),
     );
   }, [id]);
 
@@ -44,13 +51,24 @@ function BotChat() {
 
   return (
     <main className="page chat-page">
-      <BotHeader bot={bot} catalog={catalog} onChange={setBot} />
+      <BotHeader bot={bot} catalog={catalog} hasComputer={Boolean(computer && computer !== "off")} onChange={setBot} />
+      {computer !== undefined && computer !== "off" && <ComputerPanel bot={bot} computer={computer} onChange={setComputer} />}
       <Conversation bot={bot} messages={messages} onMessages={setMessages} />
     </main>
   );
 }
 
-function BotHeader({ bot, catalog, onChange }: { bot: Bot; catalog: ModelCatalog; onChange: (bot: Bot) => void }) {
+function BotHeader({
+  bot,
+  catalog,
+  hasComputer,
+  onChange,
+}: {
+  bot: Bot;
+  catalog: ModelCatalog;
+  hasComputer: boolean;
+  onChange: (bot: Bot) => void;
+}) {
   const [switching, setSwitching] = useState(false);
   const [model, setModel] = useState(bot.model);
   const navigate = useNavigate();
@@ -124,7 +142,7 @@ function BotHeader({ bot, catalog, onChange }: { bot: Bot; catalog: ModelCatalog
             {confirmingDelete ? (
               <>
                 <button type="button" className="button danger small" onClick={remove}>
-                  Delete {bot.name} and its conversation
+                  Delete {bot.name}, its conversation{hasComputer ? " and its Computer" : ""}
                 </button>
                 <button type="button" className="button secondary small" onClick={() => setConfirmingDelete(false)}>
                   Keep it

@@ -29,6 +29,7 @@ Kovobot chats on the Channels you already use, works on its own cloud Computer, 
 | Bots | Create, rename, delete, switch models; no limit on how many |
 | Chat | Streamed replies on the web Channel; conversations survive a reload |
 | Model providers | OpenAI, Anthropic (prompt caching, refusal fallbacks), Google Gemini, xAI, OpenRouter, local OpenAI-compatible servers (self-hosted) |
+| Computers | Self-hosted: a Linux desktop per Bot in local Docker, watched live in the browser, with take-over |
 | Waitlist | Early-access landing page with a waitlist and a one-time launch email |
 
 Coming next: Own keys, Credit and metering, Telegram, Discord and Slack, MCP tools, memory, schedules, and cloud Computers. See the [roadmap](#roadmap).
@@ -88,7 +89,8 @@ TypeScript end to end, Postgres as the only database, and tests that run against
 - [ ] Telegram, Discord and Slack
 - [ ] MCP tools and Connected apps, with Approvals
 - [ ] Memory and schedules
-- [ ] Cloud Computers: Linux, Windows and macOS
+- [x] Linux Computers in local Docker, watched live (self-hosted)
+- [ ] Bots drive their Computers; cloud Computers: Linux, Windows and macOS
 
 ## Contributing
 

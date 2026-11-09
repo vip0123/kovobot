@@ -21,6 +21,9 @@ pnpm test -t "works only once"            # tests whose name matches
 pnpm typecheck && pnpm lint && pnpm build
 docker build -t kovobot .  # the deployable image; deploy/staging.sh puts it on Cloud Run
 docker compose up -d       # self-hosted: that image and Postgres on http://localhost:8080 (SELF-HOSTING.md)
+docker compose --profile computers up -d  # the same, plus the Computer service and Computers in local Docker
+docker build -t kovobot-computer -f apps/computers/image/Dockerfile apps/computers  # the Computer image
+pnpm --filter @kovobot/computers dev     # the Computer service on 3100; needs COMPUTER_SERVICE_API_KEY and that image
 ```
 
 With no `.env` the server starts self-hosted and writes sign-in links to its log.
@@ -28,9 +31,9 @@ With no `.env` the server starts self-hosted and writes sign-in links to its log
 ## Code rules
 
 - **Node runs the server's `.ts` files directly** by stripping types: no build step, so only erasable syntax (no enums, namespaces or constructor parameter properties) and relative imports end in `.ts`.
-- **The server's settings come only from `loadConfig`** in `packages/config`. A new server environment variable goes there, with a test, and into `.env.example`. Tooling reads its own: Vite's proxy reads `API_URL`, and tests read `TEST_DATABASE_URL`.
+- **The server's settings come only from `loadConfig`** in `packages/config`, and the Computer service's from `loadComputerServiceConfig` beside it. A new server environment variable goes there, with a test, and into `.env.example`. Tooling reads its own: Vite's proxy reads `API_URL`, and tests read `TEST_DATABASE_URL`.
 - **Migrations** live in `packages/db/migrations/NNNN_name.sql`. Each runs before its release ships, while the previous release still serves, so it must work with the previous release's code: add now, drop in a later release. An applied migration is never edited (the migrator checks checksums); write a new one.
-- **Tests sit at five seams:** `loadConfig`, the HTTP API through `apps/api/test/harness.ts` against the real database, each Model provider's `ModelAdapter` against its local fake (and `createModelAdapters` against a stubbed `fetch`, the one way to check the fixed address it gives each Model provider), the functions the CLI commands call (such as `announceSignUpOpen`, through the harness's `deps`), and booting the server. Only the edges are fake: email, Google, the clock, and Model providers, which are local HTTP servers the real SDKs talk to (`apps/api/test/fake-openai.ts`, `fake-models.ts`). The web pages are checked by hand in a browser.
+- **Tests sit at six seams:** `loadConfig` (and `loadComputerServiceConfig`), the HTTP API through `apps/api/test/harness.ts` against the real database, each Model provider's `ModelAdapter` against its local fake (and `createModelAdapters` against a stubbed `fetch`, the one way to check the fixed address it gives each Model provider), the functions the CLI commands call (such as `announceSignUpOpen`, through the harness's `deps`), booting the server, and the Computer service's own API against real Docker, running the real Computer agent in a stand-in image whose VNC server is faked (`apps/computers/test/stand-in-computer`). Only the edges are fake: email, Google, the clock, Model providers, and, for the Bot service, the Computer service; each is a local HTTP server the real client talks to (`apps/api/test/fake-openai.ts`, `fake-models.ts`, `fake-computer-service.ts`). The desktop image is checked by hand. The web pages are checked by hand in a browser.
 - **Model providers plug in behind one seam**, `ModelAdapter` in `apps/api/src/models/adapter.ts` (ADR 0005). SDK retries stay off: one HTTP attempt per call (ADR 0004).
 - **The web app calls the API on its own origin under `/api`.** Deployed, the API serves the web build, so the session cookie stays first-party. The landing page is the one cross-origin caller, and only of `POST /api/leads`.
 - **Prices and Plan limits come from `@kovobot/plans`**, the Plans-and-prices constant. Never hand-type a price in copy.

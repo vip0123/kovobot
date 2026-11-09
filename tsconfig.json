@@ -17,5 +17,5 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["apps/api", "packages", "vitest.config.ts", "test"]
+  "include": ["apps/api", "apps/computers", "packages", "vitest.config.ts", "test"]
 }
