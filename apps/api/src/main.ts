@@ -1,3 +1,4 @@
+import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net";
 import { serve } from "@hono/node-server";
 import { createDb } from "@kovobot/db";
 import { type AppDeps, createApp } from "./app.ts";
@@ -7,6 +8,11 @@ import { createMailer } from "./mailer.ts";
 import { SLEEP_SWEEP_MS, sleepIdleComputers } from "./computer-sleep.ts";
 import { liveViewUpgrade } from "./live-view.ts";
 import { createModelAdapters } from "./models/adapters.ts";
+
+// Node gives each of a host's addresses 250 ms to connect before abandoning it for the next.
+// On a slow link without IPv6 that failed one new connection to a Model provider in five, and
+// Model calls aren't retried (ADR 0004). Two seconds lets a slow connection finish.
+setDefaultAutoSelectFamilyAttemptTimeout(2_000);
 
 const { config, warnings } = configOrExit();
 for (const warning of warnings) console.warn(`Warning: ${warning}`);
