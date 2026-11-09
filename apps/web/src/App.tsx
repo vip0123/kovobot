@@ -2,6 +2,7 @@ import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router";
 import { BotPage } from "./pages/BotPage.tsx";
 import { BotsPage } from "./pages/BotsPage.tsx";
 import { ConfirmSignInPage } from "./pages/ConfirmSignInPage.tsx";
+import { NewBotPage } from "./pages/NewBotPage.tsx";
 import { SignInPage } from "./pages/SignInPage.tsx";
 
 export function App() {
@@ -12,6 +13,7 @@ export function App() {
         <Route path="/sign-in" element={<SignInPage />} />
         <Route path="/sign-in/confirm" element={<ConfirmSignInPage />} />
         <Route path="/bots" element={<BotsPage />} />
+        <Route path="/bots/new" element={<NewBotPage />} />
         <Route path="/bots/:id" element={<BotPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>

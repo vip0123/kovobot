@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type RFB from "@novnc/novnc";
 import { api, type Bot, type Computer, type ComputerSize, errorMessage, type ModelCatalog } from "./api.ts";
+import { CloseIcon } from "./Icons.tsx";
 
 /** Driver models come only from the Model providers with a computer-use tool. */
 const DRIVER_PROVIDERS = new Set(["openai", "anthropic", "google"]);
@@ -27,12 +28,14 @@ export function ComputerPanel({
   computer,
   onChange,
   onBotChange,
+  onClose,
 }: {
   bot: Bot;
   catalog: ModelCatalog;
   computer: Computer | null;
   onChange: (computer: Computer | null) => void;
   onBotChange: (bot: Bot) => void;
+  onClose: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [watching, setWatching] = useState(false);
@@ -81,106 +84,120 @@ export function ComputerPanel({
   const remove = () => act(async () => (await api.deleteComputer(bot.id), null));
 
   return (
-    <section className="computer" aria-label={`${bot.name}'s Computer`}>
+    <section className="computer">
       <div className="computer-head">
-        <h2>Computer</h2>
-        <span className="muted small">
-          {computer
-            ? `${STATE_LABELS[computer.state]} · ${sizeLabel(computer.size)}`
-            : `None yet: a Linux desktop ${bot.name} can work on.`}
-        </span>
-        <div className="actions">
-          {sizes.length > 1 && (
-            <>
-              <label htmlFor="computer-size" className="visually-hidden">
-                Size
-              </label>
-              <select
-                id="computer-size"
-                value={computer ? computer.size : size}
-                disabled={busy}
-                onChange={(event) => (computer ? resize(event.target.value) : setSize(event.target.value))}
-              >
-                {sizes.map((option) => (
-                  <option key={option.size} value={option.size}>
-                    {sizeLabel(option.size)}
-                  </option>
-                ))}
-              </select>
-            </>
-          )}
-          {computer && (
-            <>
-              <label htmlFor="computer-sleep" className="muted small">
-                Sleeps after
-              </label>
-              <select
-                id="computer-sleep"
-                value={computer.sleepAfterMinutes}
-                disabled={busy}
-                onChange={(event) => setSleep(Number(event.target.value))}
-              >
-                {SLEEP_CHOICES.map((choice) => (
-                  <option key={choice.minutes} value={choice.minutes}>
-                    {choice.label}
-                  </option>
-                ))}
-              </select>
-            </>
-          )}
-          {!computer && (
-            <button type="button" className="button primary small" disabled={busy} onClick={create}>
-              {busy ? "Creating…" : "Create a Computer"}
-            </button>
-          )}
-          {computer?.state === "running" && (
-            <>
-              <button type="button" className="button secondary small" onClick={() => setWatching(!watching)}>
-                {watching ? "Hide live view" : "Watch live"}
-              </button>
-              <button type="button" className="button secondary small" disabled={busy} onClick={shutDown}>
-                Shut down
-              </button>
-            </>
-          )}
-          {computer && computer.state !== "running" && (
-            <button type="button" className="button primary small" disabled={busy} onClick={start}>
-              {busy ? "Starting…" : "Start"}
-            </button>
-          )}
-          {computer &&
-            (confirmingDelete ? (
-              <>
-                <button type="button" className="button danger small" disabled={busy} onClick={remove}>
-                  Delete the Computer and its files
-                </button>
-                <button type="button" className="button secondary small" onClick={() => setConfirmingDelete(false)}>
-                  Keep it
-                </button>
-              </>
-            ) : (
-              <button type="button" className="button secondary small" onClick={() => setConfirmingDelete(true)}>
-                Delete
-              </button>
-            ))}
+        <div className="computer-title">
+          <h2>Computer</h2>
+          <span className={`badge ${computer ? computer.state : "none"}`}>
+            {computer ? STATE_LABELS[computer.state] : "None yet"}
+          </span>
         </div>
+        <button type="button" className="icon-button" aria-label="Close the Computer panel" onClick={onClose}>
+          <CloseIcon />
+        </button>
       </div>
+      <p className="muted small">
+        {computer
+          ? `A Linux desktop with Firefox, ${sizeLabel(computer.size)}.`
+          : `A Linux desktop with Firefox that ${bot.name} can work on. You can watch it live and take over at any time.`}
+      </p>
+
+      {watching && computer?.state === "running" && <LiveView botId={bot.id} />}
+
+      <div className="actions">
+        {!computer && (
+          <button type="button" className="button primary" disabled={busy} onClick={create}>
+            {busy ? "Creating…" : "Create a Computer"}
+          </button>
+        )}
+        {computer?.state === "running" && (
+          <>
+            <button type="button" className="button primary small" onClick={() => setWatching(!watching)}>
+              {watching ? "Hide live view" : "Watch live"}
+            </button>
+            <button type="button" className="button secondary small" disabled={busy} onClick={shutDown}>
+              Shut down
+            </button>
+          </>
+        )}
+        {computer && computer.state !== "running" && (
+          <button type="button" className="button primary small" disabled={busy} onClick={start}>
+            {busy ? "Starting…" : "Start"}
+          </button>
+        )}
+      </div>
+
+      <div className="computer-settings">
+        {sizes.length > 1 && (
+          <div className="field">
+            <label htmlFor="computer-size">Size</label>
+            <select
+              id="computer-size"
+              value={computer ? computer.size : size}
+              disabled={busy}
+              onChange={(event) => (computer ? resize(event.target.value) : setSize(event.target.value))}
+            >
+              {sizes.map((option) => (
+                <option key={option.size} value={option.size}>
+                  {sizeLabel(option.size)}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {computer && (
+          <div className="field">
+            <label htmlFor="computer-sleep">Goes Asleep after</label>
+            <select
+              id="computer-sleep"
+              value={computer.sleepAfterMinutes}
+              disabled={busy}
+              onChange={(event) => setSleep(Number(event.target.value))}
+            >
+              {SLEEP_CHOICES.map((choice) => (
+                <option key={choice.minutes} value={choice.minutes}>
+                  {choice.label} with nothing going on
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {computer && (
+          <div className="field">
+            <label htmlFor="driver-model">{bot.name} uses it with</label>
+            <select id="driver-model" value={bot.driverModel ?? ""} onChange={(event) => void setDriver(event.target.value)}>
+              <option value="">No Driver model: {bot.name} can't use it yet</option>
+              {drivers.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name}
+                </option>
+              ))}
+            </select>
+            {drivers.length === 0 && (
+              <span className="muted small">A Driver model needs an OpenAI, Anthropic or Google key set up here.</span>
+            )}
+          </div>
+        )}
+      </div>
+
       {computer && (
-        <div className="computer-driver">
-          <label htmlFor="driver-model" className="muted small">
-            {bot.name} uses it with
-          </label>
-          <select id="driver-model" value={bot.driverModel ?? ""} onChange={(event) => void setDriver(event.target.value)}>
-            <option value="">No Driver model: {bot.name} can't use it yet</option>
-            {drivers.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.name}
-              </option>
-            ))}
-          </select>
+        <div className="actions computer-delete">
+          {confirmingDelete ? (
+            <>
+              <button type="button" className="button danger small" disabled={busy} onClick={remove}>
+                Delete the Computer and its files
+              </button>
+              <button type="button" className="button secondary small" onClick={() => setConfirmingDelete(false)}>
+                Keep it
+              </button>
+            </>
+          ) : (
+            <button type="button" className="button ghost small danger-text" onClick={() => setConfirmingDelete(true)}>
+              Delete the Computer…
+            </button>
+          )}
         </div>
       )}
-      {watching && computer?.state === "running" && <LiveView botId={bot.id} />}
       {error && (
         <p className="alert" role="alert">
           {error}
@@ -263,6 +280,7 @@ function Screen({ botId, onReconnect }: { botId: string; onReconnect: () => void
 
   return (
     <div className="live-view">
+      <div ref={screen} className={`live-view-screen${inControl ? " in-control" : ""}`} />
       <div className="live-view-bar">
         <span className="muted small">
           {status === "connecting" && "Connecting…"}
@@ -271,7 +289,7 @@ function Screen({ botId, onReconnect }: { botId: string; onReconnect: () => void
           {status === "disconnected" && (error ?? "The live view closed.")}
         </span>
         {status === "connected" && (
-          <button type="button" className="button secondary small" onClick={() => void toggleControl()}>
+          <button type="button" className={`button small ${inControl ? "danger" : "secondary"}`} onClick={() => void toggleControl()}>
             {inControl ? "Hand back" : "Take over"}
           </button>
         )}
@@ -281,7 +299,6 @@ function Screen({ botId, onReconnect }: { botId: string; onReconnect: () => void
           </button>
         )}
       </div>
-      <div ref={screen} className={`live-view-screen${inControl ? " in-control" : ""}`} />
     </div>
   );
 }
