@@ -93,51 +93,70 @@ export function createGoogleAdapter({ apiKey, baseURL }: { apiKey: string; baseU
 }
 
 /**
- * One of the computer-use tool's predefined functions, as the Computer agent's actions.
- * Gemini points on a 0-999 grid, scaled here to the screen's pixels. The function names
- * follow Google's computer-use reference; until checked against the live API (no Gemini
- * key here), anything unknown is answered as something the Computer can't do.
+ * One of the computer-use tool's predefined functions for the desktop environment, as the
+ * Computer agent's actions. The names and arguments are Google's computer-use reference for
+ * ENVIRONMENT_DESKTOP, as gemini-4-argon sent them live. Gemini points on a 0-999 grid,
+ * scaled here to the screen's pixels. Anything else is answered as something the Computer can't do.
  */
 function computerStep(id: string, name: string, args: Record<string, unknown>, screen: { width: number; height: number }): ComputerStep {
   const px = (value: unknown, size: number) => Math.min(size - 1, Math.max(0, Math.round((Number(value) / 1000) * size)));
   const x = px(args.x, screen.width);
   const y = px(args.y, screen.height);
   const step = (actions: ComputerAction[]): ComputerStep => ({ id, name, actions, screenshot: true });
-  const scroll = (direction: unknown, clicks: number, at?: { x: number; y: number }): ComputerAction => ({
-    type: "scroll",
-    ...at,
-    dx: direction === "left" ? -clicks : direction === "right" ? clicks : 0,
-    dy: direction === "up" ? -clicks : direction === "down" ? clicks : 0,
-  });
+  const click = (button: "left" | "middle" | "right", count: 1 | 2 | 3) => step([{ type: "click", x, y, button, count }]);
   switch (name) {
-    case "click_at":
-      return step([{ type: "click", x, y, button: "left", count: 1 }]);
-    case "hover_at":
-      return step([{ type: "move", x, y }]);
-    case "type_text_at": {
-      const actions: ComputerAction[] = [{ type: "click", x, y, button: "left", count: 1 }];
-      if (args.clear_before_typing !== false) actions.push({ type: "keys", keys: "ctrl+a" }, { type: "keys", keys: "BackSpace" });
-      actions.push({ type: "type", text: String(args.text ?? "") });
+    case "click":
+      return click("left", 1);
+    case "double_click":
+      return click("left", 2);
+    case "triple_click":
+      return click("left", 3);
+    case "right_click":
+      return click("right", 1);
+    case "middle_click":
+      return click("middle", 1);
+    case "type": {
+      // Into whatever has the focus; Gemini clicks first when it needs to.
+      const actions: ComputerAction[] = [{ type: "type", text: String(args.text ?? "") }];
       if (args.press_enter === true) actions.push({ type: "keys", keys: "Return" });
       return step(actions);
     }
-    case "key_combination":
-      return step([{ type: "keys", keys: xdotoolKeys(String(args.keys ?? "")) }]);
-    case "scroll_at":
-      return step([scroll(args.direction, Math.min(50, Math.max(1, Math.round(Number(args.magnitude ?? 600) / 200))), { x, y })]);
-    case "scroll_document":
-      return step([scroll(args.direction, 5, { x: Math.floor(screen.width / 2), y: Math.floor(screen.height / 2) })]);
+    case "press_key":
+      return step([{ type: "keys", keys: xdotoolKeys(String(args.key ?? "")) }]);
+    case "hotkey": {
+      const keys = Array.isArray(args.keys) ? args.keys.map(String) : [String(args.keys ?? "")];
+      return step([{ type: "keys", keys: xdotoolKeys(keys.join("+")) }]);
+    }
+    case "move":
+      return step([{ type: "move", x, y }]);
+    case "mouse_down":
+    case "mouse_up":
+      return step([{ type: "move", x, y }, { type: name, button: "left" }]);
     case "drag_and_drop":
-      return step([{ type: "drag", path: [[x, y], [px(args.destination_x, screen.width), px(args.destination_y, screen.height)]] }]);
-    case "wait_5_seconds":
-      return step([{ type: "wait", ms: 5000 }]);
-    case "go_back":
-      return step([{ type: "keys", keys: "alt+Left" }]);
-    case "go_forward":
-      return step([{ type: "keys", keys: "alt+Right" }]);
-    case "navigate":
-      // The browser's address bar, the address, Enter.
-      return step([{ type: "keys", keys: "ctrl+l" }, { type: "type", text: String(args.url ?? "") }, { type: "keys", keys: "Return" }]);
+      return step([
+        {
+          type: "drag",
+          path: [
+            [px(args.start_x, screen.width), px(args.start_y, screen.height)],
+            [px(args.end_x, screen.width), px(args.end_y, screen.height)],
+          ],
+        },
+      ]);
+    case "scroll": {
+      // magnitude_in_pixels defaults to 300; a wheel click moves about 100 pixels.
+      const clicks = Math.min(10, Math.max(1, Math.round(Number(args.magnitude_in_pixels ?? 300) / 100)));
+      const direction = args.direction;
+      const dx = direction === "left" ? -clicks : direction === "right" ? clicks : 0;
+      const dy = direction === "up" ? -clicks : direction === "down" ? clicks : 0;
+      return step([{ type: "scroll", x, y, dx, dy }]);
+    }
+    case "wait":
+      return step([{ type: "wait", ms: Math.min(60, Math.max(0, Number(args.seconds ?? 1))) * 1000 }]);
+    case "take_screenshot":
+      return step([]);
+    case "key_down":
+    case "key_up":
+      return { ...step([]), unsupported: `The Computer can't hold a key down; press keys together with hotkey instead.` };
     default:
       return { ...step([]), unsupported: `The Computer can't do "${name}"; use the desktop's own menus and windows instead.` };
   }

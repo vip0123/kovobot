@@ -273,13 +273,16 @@ describe("Google", () => {
     });
   });
 
+  // The desktop environment's actions are named as Google documents them and gemini-4-argon sent them live.
   test("a Driver model gets the computer-use tool; its 0-999 grid becomes the screen's pixels, and each call is answered with a screenshot", async () => {
     gemini.callFunctions(
-      { name: "click_at", args: { x: 500, y: 250 } },
-      { name: "type_text_at", args: { x: 100, y: 100, text: "kovobot", press_enter: true } },
-      { name: "key_combination", args: { keys: "control+c" } },
+      { name: "click", args: { x: 500, y: 250, intent: "Open the terminal" } },
+      { name: "double_click", args: { x: 100, y: 100 } },
+      { name: "triple_click", args: { x: 100, y: 100 } },
+      { name: "right_click", args: { x: 100, y: 100 } },
+      { name: "middle_click", args: { x: 100, y: 100 } },
       {
-        name: "click_at",
+        name: "click",
         args: { x: 999, y: 0, safety_decision: { decision: "require_confirmation", explanation: "This buys something." } },
       },
       { name: "open_web_browser", args: {} },
@@ -287,27 +290,19 @@ describe("Google", () => {
     const turn = await events(adapter(), { model: "gemini-4-argon", conversation: [ask], computer: SCREEN });
 
     expect(lastBody().tools).toEqual([{ computerUse: { environment: "ENVIRONMENT_DESKTOP" } }]);
+    const click = (button: string, count: number, x = 128, y = 80) => [{ type: "click", x, y, button, count }];
     expect(turn.find((event) => event.type === "computer_call")).toEqual({
       type: "computer_call",
       call: {
-        safetyChecks: [{ id: "gemini-3", message: "This buys something." }],
+        safetyChecks: [{ id: "gemini-5", message: "This buys something." }],
         steps: [
-          { id: "gemini-0", name: "click_at", screenshot: true, actions: [{ type: "click", x: 640, y: 200, button: "left", count: 1 }] },
-          {
-            id: "gemini-1",
-            name: "type_text_at",
-            screenshot: true,
-            actions: [
-              { type: "click", x: 128, y: 80, button: "left", count: 1 },
-              { type: "keys", keys: "ctrl+a" },
-              { type: "keys", keys: "BackSpace" },
-              { type: "type", text: "kovobot" },
-              { type: "keys", keys: "Return" },
-            ],
-          },
-          { id: "gemini-2", name: "key_combination", screenshot: true, actions: [{ type: "keys", keys: "ctrl+c" }] },
-          { id: "gemini-3", name: "click_at", screenshot: true, actions: [{ type: "click", x: 1279, y: 0, button: "left", count: 1 }] },
-          expect.objectContaining({ id: "gemini-4", name: "open_web_browser", actions: [], unsupported: expect.any(String) }),
+          { id: "gemini-0", name: "click", screenshot: true, actions: click("left", 1, 640, 200) },
+          { id: "gemini-1", name: "double_click", screenshot: true, actions: click("left", 2) },
+          { id: "gemini-2", name: "triple_click", screenshot: true, actions: click("left", 3) },
+          { id: "gemini-3", name: "right_click", screenshot: true, actions: click("right", 1) },
+          { id: "gemini-4", name: "middle_click", screenshot: true, actions: click("middle", 1) },
+          { id: "gemini-5", name: "click", screenshot: true, actions: click("left", 1, 1279, 0) },
+          expect.objectContaining({ id: "gemini-6", name: "open_web_browser", actions: [], unsupported: expect.any(String) }),
         ],
       },
     });
@@ -318,12 +313,66 @@ describe("Google", () => {
       conversation: [
         ask,
         { role: "turn", raw: turnOf(turn) },
-        { role: "computer_results", results: [{ id: "gemini-0", name: "click_at", screenshot: SCREENSHOT }] },
+        { role: "computer_results", results: [{ id: "gemini-0", name: "click", screenshot: SCREENSHOT }] },
       ],
     });
     expect(lastBody().contents[2]).toEqual({
       role: "user",
-      parts: [{ functionResponse: { name: "click_at", response: {}, parts: [{ inlineData: { mimeType: "image/png", data: SCREENSHOT } }] } }],
+      parts: [{ functionResponse: { name: "click", response: {}, parts: [{ inlineData: { mimeType: "image/png", data: SCREENSHOT } }] } }],
+    });
+  });
+
+  test("Gemini types where the focus is, and presses keys and key combinations by its own names", async () => {
+    gemini.callFunctions(
+      { name: "type", args: { text: "uname -sr", press_enter: true } },
+      { name: "type", args: { text: "kovobot" } },
+      { name: "press_key", args: { key: "enter" } },
+      { name: "hotkey", args: { keys: ["control", "shift", "t"] } },
+    );
+    const turn = await events(adapter(), { model: "gemini-4-argon", conversation: [ask], computer: SCREEN });
+
+    expect(turn.find((event) => event.type === "computer_call")).toMatchObject({
+      call: {
+        steps: [
+          { name: "type", actions: [{ type: "type", text: "uname -sr" }, { type: "keys", keys: "Return" }] },
+          { name: "type", actions: [{ type: "type", text: "kovobot" }] },
+          { name: "press_key", actions: [{ type: "keys", keys: "Return" }] },
+          { name: "hotkey", actions: [{ type: "keys", keys: "ctrl+shift+t" }] },
+        ],
+      },
+    });
+  });
+
+  test("Gemini moves, presses, drags, scrolls and waits on the same grid; holding keys down isn't possible", async () => {
+    gemini.callFunctions(
+      { name: "move", args: { x: 500, y: 250 } },
+      { name: "mouse_down", args: { x: 100, y: 100 } },
+      { name: "mouse_up", args: { x: 500, y: 250 } },
+      { name: "drag_and_drop", args: { start_x: 100, start_y: 100, end_x: 500, end_y: 250 } },
+      { name: "scroll", args: { x: 500, y: 500, direction: "down", magnitude_in_pixels: 500 } },
+      { name: "scroll", args: { x: 500, y: 500, direction: "left" } },
+      { name: "wait", args: { seconds: 2 } },
+      { name: "wait", args: {} },
+      { name: "take_screenshot", args: {} },
+      { name: "key_down", args: { key: "shift" } },
+    );
+    const turn = await events(adapter(), { model: "gemini-4-argon", conversation: [ask], computer: SCREEN });
+
+    expect(turn.find((event) => event.type === "computer_call")).toMatchObject({
+      call: {
+        steps: [
+          { name: "move", actions: [{ type: "move", x: 640, y: 200 }] },
+          { name: "mouse_down", actions: [{ type: "move", x: 128, y: 80 }, { type: "mouse_down", button: "left" }] },
+          { name: "mouse_up", actions: [{ type: "move", x: 640, y: 200 }, { type: "mouse_up", button: "left" }] },
+          { name: "drag_and_drop", actions: [{ type: "drag", path: [[128, 80], [640, 200]] }] },
+          { name: "scroll", actions: [{ type: "scroll", x: 640, y: 400, dx: 0, dy: 5 }] },
+          { name: "scroll", actions: [{ type: "scroll", x: 640, y: 400, dx: -3, dy: 0 }] },
+          { name: "wait", actions: [{ type: "wait", ms: 2000 }] },
+          { name: "wait", actions: [{ type: "wait", ms: 1000 }] },
+          { name: "take_screenshot", actions: [], screenshot: true },
+          { name: "key_down", actions: [], unsupported: expect.stringContaining("hotkey") },
+        ],
+      },
     });
   });
 });
