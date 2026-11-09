@@ -146,4 +146,11 @@ export class ModelError extends Error {
     super(message, { cause: options.cause });
     this.usage = options.usage ?? [];
   }
+
+  /** Whether the Model provider refused the key itself (HTTP 401 or 403), which trying again won't fix. */
+  get keyRefused(): boolean {
+    // Each Model provider's SDK puts the HTTP status on the error it throws.
+    const status = (this.cause as { status?: unknown } | undefined)?.status;
+    return status === 401 || status === 403;
+  }
 }

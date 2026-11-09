@@ -19,7 +19,7 @@ import { FAKE_OPENAI_KEY, FakeOpenAI } from "./fake-openai.ts";
 
 /**
  * The API wired to the real, migrated test database. Only the edges are fake:
- * email lands in `outbox`, Google is `google`, and the clock is set by hand.
+ * email lands in `outbox` (or fails, with `mail.down`), Google is `google`, and the clock is set by hand.
  * Model providers are local servers the real SDKs talk to: OpenAI is `openai`,
  * Anthropic `anthropic`, and `chatCompletions` serves OpenRouter and a local
  * model server, each only when its option is on.
@@ -79,6 +79,8 @@ export function startTestServer(
     ...env,
   });
   const outbox: Email[] = [];
+  /** Set `down` and every email fails to send, as when the mail server can't be reached. */
+  const mail = { down: false };
   const clock = {
     now: new Date("2026-11-05T12:00:00Z"),
     advanceMinutes(minutes: number) {
@@ -93,7 +95,12 @@ export function startTestServer(
   const deps: AppDeps = {
     config,
     db,
-    mailer: { send: async (email) => void outbox.push(email) },
+    mailer: {
+      send: async (email) => {
+        if (mail.down) throw new Error("getaddrinfo ENOTFOUND mail.example.com");
+        outbox.push(email);
+      },
+    },
     fetch: google.fetch,
     models,
     // The fake's address is known only once it listens, so the client is made on first use.
@@ -109,6 +116,7 @@ export function startTestServer(
     deps,
     config,
     outbox,
+    mail,
     clock,
     google,
     openai,
