@@ -8,7 +8,7 @@ import { sessionCustomer } from "./auth/sessions.ts";
 import { computerRoutes, computerSizes, deleteBotComputer } from "./computer-routes.ts";
 import { addMessage, listMessages, type Message, startReplying, stopReplying, webConversation } from "./conversations.ts";
 import type { Customer } from "./customers.ts";
-import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
+import { apiError, botNotFound, jsonBody, UUID_PATTERN } from "./http.ts";
 import type { ModelAdapters, ModelProvider } from "./models/adapter.ts";
 import { describeModel, MODELS, type ModelInfo } from "./models/catalog.ts";
 import { noteRoutes } from "./notes.ts";
@@ -89,7 +89,7 @@ export function botRoutes(deps: AppDeps) {
     const body = await jsonBody(c);
     const name = body.name === undefined ? undefined : botName(body.name);
     if (name === null) return invalidName(c);
-    const instructions = body.instructions === undefined ? undefined : botInstructions(body.instructions);
+    const instructions = body.instructions === undefined ? undefined : readInstructions(body.instructions);
     if (instructions === null) {
       const limit = MAX_INSTRUCTIONS_LENGTH.toLocaleString("en-US");
       return apiError(c, 400, "invalid_instructions", `Write instructions of up to ${limit} characters.`);
@@ -215,10 +215,6 @@ async function customerClock(db: Db, customerId: string, given: unknown): Promis
   return rows[0]?.timeZone ?? null;
 }
 
-function botNotFound(c: Parameters<typeof apiError>[0]) {
-  return apiError(c, 404, "bot_not_found", "There's no such Bot.");
-}
-
 /** The model a Bot is being set to, or why it can't be: unknown, or its Model provider isn't set up here. */
 function chooseModel(id: unknown, adapters: ModelAdapters): ModelInfo | { code: string; message: string } {
   const model = describeModel(id);
@@ -247,7 +243,7 @@ function botName(value: unknown): string | null {
 }
 
 /** A Bot's instructions as given, trimmed; empty clears them. Null if they aren't text that fits. */
-function botInstructions(value: unknown): string | null {
+function readInstructions(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const instructions = value.trim();
   return instructions.length <= MAX_INSTRUCTIONS_LENGTH ? instructions : null;
