@@ -138,6 +138,10 @@ _Avoid_: computer-use model
 The work a Bot does for one incoming message or one schedule firing, until it replies or stops.
 _Avoid_: job, run, turn
 
+**Schedule**:
+A task a Bot does on its own at set times: once, every day, on weekdays, on chosen days of the week or once a month, on the clock of a time zone. The Customer sets one on the Bot's page, or asks the Bot to. Each firing is one Task, and its reply goes into the Bot's Conversation.
+_Avoid_: cron, job, automation, reminder (for the schedule itself)
+
 ### Approvals
 
 **Approval**:

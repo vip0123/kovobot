@@ -13,6 +13,7 @@ import type { ModelAdapters, ModelProvider } from "./models/adapter.ts";
 import { describeModel, MODELS, type ModelInfo } from "./models/catalog.ts";
 import { noteRoutes } from "./notes.ts";
 import { runReply } from "./replies.ts";
+import { isTimeZone, scheduleRoutes } from "./schedules.ts";
 import { skillRoutes } from "./skills.ts";
 
 export interface Bot {
@@ -118,6 +119,7 @@ export function botRoutes(deps: AppDeps) {
   routes.route("/bots/:id/computer", computerRoutes(deps));
   routes.route("/", skillRoutes(deps));
   routes.route("/bots/:id/notes", noteRoutes(deps));
+  routes.route("/bots/:id/schedules", scheduleRoutes(deps));
 
   routes.get("/bots/:id/messages", async (c) => {
     const bot = await findBot(deps.db, c.get("customer").id, c.req.param("id"));
@@ -150,7 +152,7 @@ export function botRoutes(deps: AppDeps) {
   routes.post("/bots/:id/messages", messageSize, async (c) => {
     const bot = await findBot(deps.db, c.get("customer").id, c.req.param("id"));
     if (!bot) return botNotFound(c);
-    const { content, thinkHarder, webSearch, attachments } = await jsonBody(c);
+    const { content, thinkHarder, webSearch, attachments, timeZone } = await jsonBody(c);
     const text = typeof content === "string" ? content.trim() : "";
     const files = readAttachments(attachments);
     if ("error" in files) return apiError(c, 400, "invalid_attachments", files.error);
@@ -192,11 +194,25 @@ export function botRoutes(deps: AppDeps) {
       // The Customer's message as saved, so the page can link its Attachments straight away.
       await send("sent", { message: sent });
       const thinking = thinkHarder === true ? ("deep" as const) : ("normal" as const);
-      await runReply(deps, { bot, model, adapter, conversationId, thinking, webSearch: searchesTheWeb }, send);
+      const customerTimeZone = await customerClock(deps.db, c.get("customer").id, timeZone);
+      await runReply(deps, { bot, model, adapter, conversationId, thinking, webSearch: searchesTheWeb, timeZone: customerTimeZone }, send);
     });
   });
 
   return routes;
+}
+
+/**
+ * The Customer's time zone: the one their browser sent with this message, kept for the Bot's
+ * schedules; else the last one kept; null when there has never been one.
+ */
+async function customerClock(db: Db, customerId: string, given: unknown): Promise<string | null> {
+  if (isTimeZone(given)) {
+    await db.query("UPDATE customers SET time_zone = $2 WHERE id = $1 AND time_zone IS DISTINCT FROM $2", [customerId, given]);
+    return given;
+  }
+  const { rows } = await db.query<{ timeZone: string | null }>(`SELECT time_zone AS "timeZone" FROM customers WHERE id = $1`, [customerId]);
+  return rows[0]?.timeZone ?? null;
 }
 
 function botNotFound(c: Parameters<typeof apiError>[0]) {

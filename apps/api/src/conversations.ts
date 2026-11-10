@@ -15,6 +15,8 @@ export interface Message {
   searchSuggestions: string | null;
   /** Files the Customer sent with this message. */
   attachments: AttachmentInfo[];
+  /** The schedule whose firing sent this message, rather than the Customer; null for none. */
+  scheduleId: string | null;
   createdAt: Date;
 }
 
@@ -51,7 +53,7 @@ export async function webConversation(db: Db, botId: string, now: Date): Promise
 }
 
 const MESSAGE_COLUMNS = `id::text, role, content, thinking, sources, search_suggestions AS "searchSuggestions",
-  ${ATTACHMENTS_COLUMN}, created_at AS "createdAt"`;
+  ${ATTACHMENTS_COLUMN}, schedule_id AS "scheduleId", created_at AS "createdAt"`;
 
 export async function listMessages(db: Db, conversationId: string): Promise<Message[]> {
   const { rows } = await db.query<Message>(
@@ -105,11 +107,11 @@ export async function addMessage(
   role: Message["role"],
   content: string,
   now: Date,
-  extras: { thinking?: string; cited?: { sources: WebSource[]; searchSuggestions?: string } } = {},
+  extras: { thinking?: string; cited?: { sources: WebSource[]; searchSuggestions?: string }; scheduleId?: string } = {},
 ): Promise<Message> {
   const { rows } = await db.query<Message>(
-    `INSERT INTO messages (conversation_id, role, content, thinking, sources, search_suggestions, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO messages (conversation_id, role, content, thinking, sources, search_suggestions, schedule_id, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING ${MESSAGE_COLUMNS}`,
     [
       conversationId,
@@ -118,6 +120,7 @@ export async function addMessage(
       extras.thinking || null,
       extras.cited?.sources.length ? JSON.stringify(extras.cited.sources) : null,
       extras.cited?.searchSuggestions ?? null,
+      extras.scheduleId ?? null,
       now,
     ],
   );

@@ -148,3 +148,10 @@ export const UploadIcon = (props: IconProps) => (
     <path d="M12 15V4M7 9l5-5 5 5M5 20h14" />
   </Icon>
 );
+
+export const ClockIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3 2" />
+  </Icon>
+);

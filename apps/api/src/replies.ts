@@ -6,6 +6,7 @@ import { driveComputer, drivingFor } from "./driver.ts";
 import { type ModelAdapter, ModelError, type ModelProvider, type ThinkingEffort, uniquePages, type WebSource } from "./models/adapter.ts";
 import type { ModelInfo } from "./models/catalog.ts";
 import { botNotes, notebook } from "./notes.ts";
+import { scheduleBook, timeStamp } from "./schedules.ts";
 import { botSkills, skillInstructions } from "./skills.ts";
 
 /** The Model providers a PDF isn't sent to (unchecked for xAI, unlikely on a local server): the model is told one came. */
@@ -19,6 +20,8 @@ export interface Reply {
   conversationId: string;
   thinking: ThinkingEffort;
   webSearch: boolean;
+  /** The Customer's time zone, so the model knows their date and time; null when unknown. */
+  timeZone: string | null;
 }
 
 /** What a reply reports as it runs. */
@@ -43,15 +46,25 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
     RENEW_REPLY_CLAIM_MS,
   );
   try {
-    const conversation = await conversationForModel(deps.db, await recentMessages(deps.db, conversationId), {
-      pdfs: !MODEL_PROVIDERS_WITHOUT_PDFS.has(model.provider),
-    });
+    const recent = await recentMessages(deps.db, conversationId);
+    const conversation = await conversationForModel(deps.db, recent, { pdfs: !MODEL_PROVIDERS_WITHOUT_PDFS.has(model.provider) });
+    // The newest message says when it is on the Customer's clock, and whether a schedule sent it.
+    // Only the newest: earlier ones stay as they were, so Model providers read them from their cache.
+    const newest = conversation.at(-1);
+    if (newest && recent.at(-1)?.role === "user") {
+      const when = reply.timeZone ? timeStamp(deps.now(), reply.timeZone) : null;
+      const header = recent.at(-1)!.scheduleId
+        ? `[A schedule the Customer set runs this now${when ? `, ${when}` : ""}. Do it, and reply with what you did or found.]`
+        : when && `[${when}]`;
+      if (header) newest.content = `${header}\n${newest.content}`;
+    }
     const driving = await drivingFor(deps, bot.id);
     const skills = await botSkills(deps.db, bot.id);
     const tools = {
       ...(driving ? { useComputer: (task: string) => driveComputer(deps, driving, task) } : {}),
       ...(skills.length > 0 ? { skills: { list: skills, read: (name: string) => skillInstructions(deps.db, bot.id, name) } } : {}),
       notes: { list: await botNotes(deps.db, bot.id), book: notebook(deps.db, bot.id, deps.now) },
+      schedules: scheduleBook(deps, bot.id, reply.timeZone ?? "UTC"),
     };
     const task = {
       botName: bot.name,
