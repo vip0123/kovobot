@@ -85,6 +85,21 @@ export interface ReplyHandlers {
   onSources?: (sources: WebSource[], searchSuggestions?: string) => void;
 }
 
+/** Instructions a Customer writes once for one kind of work, and gives to their Bots. */
+export interface Skill {
+  id: string;
+  name: string;
+  /** When to use it: what a Bot reads to decide whether the Skill applies. */
+  description: string;
+  instructions: string;
+  /** The Bots that have it. */
+  botIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SkillFields = Pick<Skill, "name" | "description" | "instructions">;
+
 /** A Bot's Computer. Shut down keeps its disk; Asleep keeps its memory too. */
 export interface Computer {
   state: "running" | "asleep" | "shut_down";
@@ -115,7 +130,7 @@ export class ApiError extends Error {
   }
 }
 
-type Method = "GET" | "POST" | "PATCH" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 async function send(path: string, init: { method?: Method; json?: unknown } = {}): Promise<Response> {
   let response: Response;
@@ -168,6 +183,16 @@ export const api = {
     request<{ bot: Bot }>(`/bots/${id}`, { method: "PATCH", json: { instructions } }),
   deleteBot: (id: string) => request<unknown>(`/bots/${id}`, { method: "DELETE" }),
   messages: (botId: string) => request<{ messages: Message[] }>(`/bots/${botId}/messages`),
+
+  skills: () => request<{ skills: Skill[] }>("/skills"),
+  createSkill: (fields: SkillFields) => request<{ skill: Skill }>("/skills", { method: "POST", json: fields }),
+  /** A Skill from a SKILL.md file's text: its name and description from the front matter, the rest as instructions. */
+  importSkill: (file: string) => request<{ skill: Skill }>("/skills", { method: "POST", json: { file } }),
+  updateSkill: (id: string, change: Partial<SkillFields>) =>
+    request<{ skill: Skill }>(`/skills/${id}`, { method: "PATCH", json: change }),
+  deleteSkill: (id: string) => request<unknown>(`/skills/${id}`, { method: "DELETE" }),
+  grantSkill: (botId: string, skillId: string) => request<unknown>(`/bots/${botId}/skills/${skillId}`, { method: "PUT" }),
+  revokeSkill: (botId: string, skillId: string) => request<unknown>(`/bots/${botId}/skills/${skillId}`, { method: "DELETE" }),
 
   computer: (botId: string) => request<{ computer: Computer | null }>(`/bots/${botId}/computer`),
   computerSizes: () => request<{ sizes: ComputerSize[] }>("/computer-sizes"),

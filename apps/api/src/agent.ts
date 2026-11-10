@@ -1,5 +1,6 @@
 import type { TaskEvent } from "./driver.ts";
 import type { ChatMessage, ConversationItem, FunctionTool, ModelAdapter, ThinkingEffort, ToolCall } from "./models/adapter.ts";
+import type { SkillSummary } from "./skills.ts";
 
 /** The most model calls one Task makes before it stops. */
 const MAX_TASK_STEPS = 10;
@@ -17,9 +18,25 @@ export const USE_COMPUTER: FunctionTool = {
   },
 };
 
+/** The Bot's way to one of its Skills: it sees each Skill's name and description, and reads one in full here. */
+function readSkillTool(names: string[]): FunctionTool {
+  return {
+    name: "read_skill",
+    description:
+      "Reads one of your Skills in full: the Customer's instructions for one kind of work. Read it before doing that work, then follow it.",
+    parameters: {
+      type: "object",
+      properties: { name: { type: "string", description: "The Skill's name, as your instructions list it.", enum: names } },
+      required: ["name"],
+    },
+  };
+}
+
 export interface TaskTools {
   /** Present when the Bot can drive its Computer: carries out a task there and returns the Driver model's report. */
   useComputer?: (task: string) => AsyncGenerator<TaskEvent, string>;
+  /** Present when the Bot has Skills: what it sees of each, and a way to read one's instructions. */
+  skills?: { list: SkillSummary[]; read: (name: string) => Promise<string | null> };
 }
 
 /**
@@ -43,7 +60,12 @@ export async function* runTask(
     webSearch?: boolean;
   },
 ): AsyncGenerator<TaskEvent> {
-  const tools = task.tools?.useComputer ? [USE_COMPUTER] : undefined;
+  const skills = task.tools?.skills?.list ?? [];
+  const offered = [
+    ...(task.tools?.useComputer ? [USE_COMPUTER] : []),
+    ...(skills.length > 0 ? [readSkillTool(skills.map((skill) => skill.name))] : []),
+  ];
+  const tools = offered.length > 0 ? offered : undefined;
   const conversation: ConversationItem[] = [...task.conversation];
   for (let step = 0; step < MAX_TASK_STEPS; step += 1) {
     const calls: ToolCall[] = [];
@@ -51,7 +73,7 @@ export async function* runTask(
     let paused = false;
     for await (const event of adapter.stream({
       model: task.model,
-      instructions: botInstructions(task, tools !== undefined),
+      instructions: botInstructions(task, task.tools?.useComputer !== undefined, skills),
       conversation,
       tools,
       thinking: task.thinking,
@@ -78,13 +100,32 @@ export async function* runTask(
   yield { type: "text", text: "I stopped there: that took more steps than one message allows." };
 }
 
-/** Runs one tool call; what the Driver model says along the way stays out of the reply. */
+/** Runs one tool call. */
 async function* runTool(call: ToolCall, task: { botName: string; tools?: TaskTools }): AsyncGenerator<TaskEvent, string> {
-  const useComputer = task.tools?.useComputer;
-  if (call.name !== USE_COMPUTER.name || !useComputer) return `There is no tool called ${call.name}.`;
+  const { useComputer, skills } = task.tools ?? {};
+  if (call.name === USE_COMPUTER.name && useComputer) return yield* driveComputer(call, task.botName, useComputer);
+  if (call.name === "read_skill" && skills) return yield* readSkill(call, task.botName, skills);
+  return `There is no tool called ${call.name}.`;
+}
+
+/** One of the Bot's Skills in full, by the name it asked for. */
+async function* readSkill(call: ToolCall, botName: string, skills: NonNullable<TaskTools["skills"]>): AsyncGenerator<TaskEvent, string> {
+  const asked = typeof call.input.name === "string" ? call.input.name.trim() : "";
+  const skill = skills.list.find((candidate) => candidate.name.toLowerCase() === asked.toLowerCase());
+  if (!skill) return `You have no Skill called ${asked || "that"}. Your Skills: ${skills.list.map(({ name }) => name).join(", ")}.`;
+  yield { type: "status", text: `${botName} is reading its Skill: ${skill.name}.` };
+  return (await skills.read(skill.name)) ?? `The Customer has just taken the Skill ${skill.name} away.`;
+}
+
+/** A task on the Computer; what the Driver model says along the way stays out of the reply. */
+async function* driveComputer(
+  call: ToolCall,
+  botName: string,
+  useComputer: NonNullable<TaskTools["useComputer"]>,
+): AsyncGenerator<TaskEvent, string> {
   const what = typeof call.input.task === "string" ? call.input.task.trim() : "";
   if (!what) return "Say what to do on the Computer.";
-  yield { type: "status", text: `${task.botName} is using its Computer.` };
+  yield { type: "status", text: `${botName} is using its Computer.` };
   try {
     const driving = useComputer(what);
     for (let next = await driving.next(); ; next = await driving.next()) {
@@ -97,16 +138,26 @@ async function* runTool(call: ToolCall, task: { botName: string; tools?: TaskToo
   }
 }
 
-/** Ours first, then the Customer's own, which win where the two differ. */
-function botInstructions(task: { botName: string; instructions?: string }, hasComputer: boolean): string {
-  const ours = [
-    `You are ${task.botName}, a Bot on Kovobot that works for the Customer who set you up.`,
-    "Answer clearly and briefly, and say so when you don't know something.",
-    ...(hasComputer
-      ? ["You have a Computer, a Linux desktop with Firefox: use use_computer for anything that needs a browser or desktop apps."]
-      : []),
-  ].join(" ");
+/** Ours first, then the Bot's Skills, then the Customer's own instructions, which win where they differ. */
+function botInstructions(task: { botName: string; instructions?: string }, hasComputer: boolean, skills: SkillSummary[]): string {
+  const sections = [
+    [
+      `You are ${task.botName}, a Bot on Kovobot that works for the Customer who set you up.`,
+      "Answer clearly and briefly, and say so when you don't know something.",
+      ...(hasComputer
+        ? ["You have a Computer, a Linux desktop with Firefox: use use_computer for anything that needs a browser or desktop apps."]
+        : []),
+    ].join(" "),
+  ];
+  if (skills.length > 0) {
+    sections.push(
+      [
+        "Your Skills are the Customer's instructions for particular kinds of work. When one fits what you're asked, read it with read_skill before you start, then follow it.",
+        ...skills.map((skill) => `- ${skill.name}: ${skill.description}`),
+      ].join("\n"),
+    );
+  }
   const theirs = task.instructions?.trim();
-  if (!theirs) return ours;
-  return `${ours}\n\nThe Customer gave you these instructions. Follow them, and where they differ from the above, they win.\n\n${theirs}`;
+  if (theirs) sections.push(`The Customer gave you these instructions. Follow them, and where they differ from the above, they win.\n\n${theirs}`);
+  return sections.join("\n\n");
 }

@@ -2,7 +2,7 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useM
 import { Link, Navigate, NavLink, useLocation, useNavigate } from "react-router";
 import { ApiError, api, type Bot, type Customer, type ModelCatalog } from "./api.ts";
 import { BotAvatar } from "./BotAvatar.tsx";
-import { CloseIcon, MenuIcon, MoonIcon, PlusIcon, SignOutIcon, SunIcon } from "./Icons.tsx";
+import { BookIcon, CloseIcon, MenuIcon, MoonIcon, PlusIcon, SignOutIcon, SunIcon } from "./Icons.tsx";
 import { Logo } from "./Logo.tsx";
 import { modelLabel } from "./ModelPicker.tsx";
 import { currentTheme, pickTheme, type Theme } from "./theme.ts";
@@ -129,6 +129,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             New Bot
           </Link>
           <nav className="sidebar-nav">
+            <NavLink to="/skills" className="sidebar-link">
+              <BookIcon size={18} />
+              Skills
+            </NavLink>
             <NavLink to="/bots" end className="sidebar-section">
               Bots
             </NavLink>

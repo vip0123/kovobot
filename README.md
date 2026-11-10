@@ -26,7 +26,7 @@ Kovobot chats on the Channels you already use, works on its own cloud Computer, 
 | | |
 |---|---|
 | Sign in | One-time email link or Sign in with Google; no passwords stored |
-| Bots | Create, rename, delete, switch models; give each its own instructions; no limit on how many |
+| Bots | Create, rename, delete, switch models; give each its own instructions and Skills (write them, or import SKILL.md files); no limit on how many |
 | Chat | Streamed replies on the web Channel that survive a reload; attach images, PDFs and text files; see what the model thinks; "think deeper"; web search with sources (self-hosted) |
 | Model providers | OpenAI, Anthropic (prompt caching, refusal fallbacks), Google Gemini, xAI, OpenRouter, local OpenAI-compatible servers (self-hosted) |
 | Computers | Self-hosted: a Linux desktop per Bot in local Docker. The Bot uses it through a Driver model (OpenAI, Anthropic or Google); you watch live and can take over, and the Bot waits |
