@@ -135,4 +135,4 @@ A Computer is a Linux desktop with Firefox that one Bot has. The Bot uses it thr
 
 ## What's not here yet
 
-Self-hosted Kovobot does what the hosted service does today: Bots with their own instructions, Skills, notes and schedules, models and web chat, plus Linux Computers that Bots drive and you watch and take over. Telegram, Discord and Slack, and MCP tools are on the [roadmap](README.md#roadmap).
+Self-hosted Kovobot does what the hosted service does today: Bots with their own instructions, Skills, notes, schedules and MCP servers, models and web chat, plus Linux Computers that Bots drive and you watch and take over. Telegram, Discord and Slack, and Approvals are on the [roadmap](README.md#roadmap).

@@ -11,6 +11,7 @@ import type { Customer } from "./customers.ts";
 import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
 import type { ModelAdapters, ModelProvider } from "./models/adapter.ts";
 import { describeModel, MODELS, type ModelInfo } from "./models/catalog.ts";
+import { mcpRoutes } from "./mcp.ts";
 import { noteRoutes } from "./notes.ts";
 import { runReply } from "./replies.ts";
 import { isTimeZone, scheduleRoutes } from "./schedules.ts";
@@ -50,7 +51,7 @@ const MAX_MESSAGE_LENGTH = 20_000;
 export function botRoutes(deps: AppDeps) {
   const routes = new Hono<{ Variables: { customer: Customer } }>();
 
-  for (const path of ["/models", "/computer-sizes", "/bots", "/bots/*", "/skills", "/skills/*"]) {
+  for (const path of ["/models", "/computer-sizes", "/bots", "/bots/*", "/skills", "/skills/*", "/mcp/*"]) {
     routes.use(path, async (c, next) => {
       const customer = await sessionCustomer(c, deps);
       if (!customer) return apiError(c, 401, "signed_out", "Sign in to continue.");
@@ -120,6 +121,7 @@ export function botRoutes(deps: AppDeps) {
   routes.route("/", skillRoutes(deps));
   routes.route("/bots/:id/notes", noteRoutes(deps));
   routes.route("/bots/:id/schedules", scheduleRoutes(deps));
+  routes.route("/", mcpRoutes(deps));
 
   routes.get("/bots/:id/messages", async (c) => {
     const bot = await findBot(deps.db, c.get("customer").id, c.req.param("id"));

@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router";
-import { api, BROWSER_TIME_ZONE, type Bot, errorMessage, type Note, type Schedule, type ScheduleRule, type Skill } from "./api.ts";
+import { api, BROWSER_TIME_ZONE, type Bot, errorMessage, type McpServer, type Note, type Schedule, type ScheduleRule, type Skill } from "./api.ts";
 import { CloseIcon } from "./Icons.tsx";
 
 /** The most a Bot's instructions may hold, as the API allows. */
@@ -11,12 +11,13 @@ const TABS = [
   { id: "skills", label: "Skills" },
   { id: "memory", label: "Memory" },
   { id: "schedules", label: "Schedules" },
+  { id: "tools", label: "Tools" },
 ] as const;
 
-type Tab = (typeof TABS)[number]["id"];
+export type Tab = (typeof TABS)[number]["id"];
 
 /**
- * What a Customer customises about a Bot: its instructions, its Skills and its memory.
+ * What a Customer customises about a Bot: its instructions, Skills, memory, schedules and tools.
  * `conversationLength` changes as the Bot replies, so its notes are read again.
  */
 export function CustomizePanel({
@@ -24,13 +25,18 @@ export function CustomizePanel({
   conversationLength,
   onBotChange,
   onClose,
+  openOn,
+  notice,
 }: {
   bot: Bot;
   conversationLength: number;
   onBotChange: (bot: Bot) => void;
   onClose: () => void;
+  /** The tab to open on, and a line to show there, such as after signing in to an MCP server. */
+  openOn?: Tab;
+  notice?: string;
 }) {
-  const [tab, setTab] = useState<Tab>("instructions");
+  const [tab, setTab] = useState<Tab>(openOn ?? "instructions");
   return (
     <section className="drawer-panel">
       <div className="drawer-head">
@@ -60,6 +66,7 @@ export function CustomizePanel({
         {tab === "skills" && <SkillGrants bot={bot} />}
         {tab === "memory" && <Memory bot={bot} conversationLength={conversationLength} />}
         {tab === "schedules" && <Schedules bot={bot} conversationLength={conversationLength} />}
+        {tab === "tools" && <Tools bot={bot} notice={notice} />}
       </div>
     </section>
   );
@@ -640,5 +647,122 @@ function ScheduleForm({
         </button>
       </div>
     </form>
+  );
+}
+
+/**
+ * The MCP servers connected to the Bot, and their tools. A server that wants signing in sends
+ * the Customer to its own sign-in page, which brings them back here.
+ */
+function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
+  const [servers, setServers] = useState<McpServer[] | null>(null);
+  const [url, setUrl] = useState("");
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.mcpServers(bot.id).then(
+      ({ servers }) => setServers(servers),
+      (caught: unknown) => {
+        setServers([]);
+        setError(errorMessage(caught));
+      },
+    );
+  }, [bot.id]);
+
+  async function connect(event: FormEvent) {
+    event.preventDefault();
+    setConnecting(true);
+    setError(null);
+    try {
+      const { server } = await api.connectMcpServer(bot.id, url);
+      // A server that wants signing in: off to its sign-in page, which brings the Customer back.
+      if (server.signInUrl) {
+        window.location.assign(server.signInUrl);
+        return;
+      }
+      setServers((current) => [...(current ?? []), server]);
+      setUrl("");
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  async function remove(server: McpServer) {
+    setError(null);
+    try {
+      await api.removeMcpServer(bot.id, server.id);
+      setServers((current) => current?.filter((each) => each.id !== server.id) ?? null);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  return (
+    <div className="drawer-section">
+      <p className="muted small">
+        Connect an MCP server and {bot.name} can use its tools. Tools that only read run at once; anything that would change
+        something waits for Approvals, which come next. What a tool sends back is treated as outside content.
+      </p>
+      {notice && <p className="notice small">{notice}</p>}
+      {servers === null ? (
+        <p className="muted small">Loading…</p>
+      ) : servers.length === 0 ? (
+        <p className="memory-empty small">No MCP servers yet.</p>
+      ) : (
+        <ul className="notes">
+          {servers.map((server) => (
+            <li key={server.id} className="note">
+              <div className="schedule-head">
+                <p className="note-text schedule-task">{server.name ?? new URL(server.url).hostname}</p>
+                <span className={`badge ${server.state === "connected" ? "running" : "asleep"}`}>
+                  {server.state === "connected" ? "Connected" : "Needs sign-in"}
+                </span>
+              </div>
+              <p className="muted small schedule-when">{server.url}</p>
+              {server.tools.length > 0 && (
+                <ul className="mcp-tools small">
+                  {server.tools.map((tool) => (
+                    <li key={tool.name} title={tool.description}>
+                      <code>{tool.name}</code>
+                      <span className="muted">{tool.readOnly ? "runs at once" : "waits for Approvals"}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="note-foot">
+                <span />
+                <button type="button" className="button ghost small danger-text" onClick={() => void remove(server)}>
+                  Remove
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form className="note-add" onSubmit={connect}>
+        <label htmlFor="mcp-url" className="visually-hidden">
+          MCP server address
+        </label>
+        <input
+          id="mcp-url"
+          type="url"
+          required
+          placeholder="https://mcp.example.com/mcp"
+          value={url}
+          onChange={(event) => setUrl(event.target.value)}
+        />
+        <button type="submit" className="button secondary small" disabled={connecting || !url.trim()}>
+          {connecting ? "Connecting…" : "Connect"}
+        </button>
+      </form>
+      {error && (
+        <p className="alert" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }

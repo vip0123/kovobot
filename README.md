@@ -26,13 +26,13 @@ Kovobot chats on the Channels you already use, works on its own cloud Computer, 
 | | |
 |---|---|
 | Sign in | One-time email link or Sign in with Google; no passwords stored |
-| Bots | Create, rename, delete, switch models; give each its own instructions and Skills (write them, or import SKILL.md files); each keeps notes across Conversations that you can read and edit, and does tasks on schedules you or it set; no limit on how many |
+| Bots | Create, rename, delete, switch models, with no limit on how many. Give each its own instructions and Skills (write them, or import SKILL.md files). Each keeps notes across Conversations that you can read and edit, does tasks on schedules you or it set, and uses the tools of MCP servers you connect |
 | Chat | Streamed replies on the web Channel that survive a reload; attach images, PDFs and text files; see what the model thinks; "think deeper"; web search with sources (self-hosted) |
 | Model providers | OpenAI, Anthropic (prompt caching, refusal fallbacks), Google Gemini, xAI, OpenRouter, local OpenAI-compatible servers (self-hosted) |
 | Computers | Self-hosted: a Linux desktop per Bot in local Docker. The Bot uses it through a Driver model (OpenAI, Anthropic or Google); you watch live and can take over, and the Bot waits |
 | Waitlist | Early-access landing page with a waitlist and a one-time launch email |
 
-Coming next: Own keys, Credit and metering, Telegram, Discord and Slack, MCP tools, and cloud Computers. See the [roadmap](#roadmap).
+Coming next: Own keys, Credit and metering, Telegram, Discord and Slack, Approvals and Connected apps, and cloud Computers. See the [roadmap](#roadmap).
 
 ## Self-host in five minutes
 
@@ -87,7 +87,8 @@ TypeScript end to end, Postgres as the only database, and tests that run against
 - [ ] Own keys per Bot
 - [ ] Credit, metering and Plans (hosted)
 - [ ] Telegram, Discord and Slack
-- [ ] MCP tools and Connected apps, with Approvals
+- [x] MCP servers: connect one to a Bot, sign in with OAuth, and its read-only tools run at once
+- [ ] Approvals, then MCP tools that change things, and Connected apps
 - [x] Memory: notes each Bot keeps, which you read and edit
 - [x] Schedules: once, daily, weekdays, weekly or monthly, in your time zone
 - [x] Linux Computers in local Docker, watched live (self-hosted)

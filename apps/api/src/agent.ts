@@ -1,4 +1,5 @@
 import type { TaskEvent } from "./driver.ts";
+import type { ConnectedTool } from "./mcp.ts";
 import type { ChatMessage, ConversationItem, FunctionTool, ModelAdapter, ThinkingEffort, ToolCall } from "./models/adapter.ts";
 import type { Note, Notebook } from "./notes.ts";
 import type { ScheduleBook } from "./schedules.ts";
@@ -111,6 +112,8 @@ export interface TaskTools {
   notes?: { list: Array<Pick<Note, "id" | "content">>; book: Notebook };
   /** The Bot's hand on its schedules. */
   schedules?: ScheduleBook;
+  /** Tools from servers and apps the Customer connected to the Bot. What they return is Outside content. */
+  connected?: ConnectedTool[];
 }
 
 /** What a Task has read so far: once it reads Outside content, what it writes down is marked for the Customer to check. */
@@ -145,6 +148,7 @@ export async function* runTask(
     ...(skills.length > 0 ? [readSkillTool(skills.map((skill) => skill.name))] : []),
     ...(task.tools?.notes ? NOTE_TOOLS : []),
     ...(task.tools?.schedules ? SCHEDULE_TOOLS : []),
+    ...(task.tools?.connected ?? []).map(({ tool }) => tool),
   ];
   const tools = offered.length > 0 ? offered : undefined;
   const instructions = botInstructions({
@@ -202,6 +206,17 @@ async function* runTool(call: ToolCall, task: { botName: string; tools?: TaskToo
   if (call.name === "read_skill" && skills) return yield* readSkill(call, task.botName, skills);
   if (notes && NOTE_TOOLS.some((tool) => tool.name === call.name)) return yield* writeNote(call, task.botName, notes.book, state);
   if (schedules && SCHEDULE_TOOLS.some((tool) => tool.name === call.name)) return yield* useSchedules(call, task.botName, schedules, state);
+  const connected = task.tools?.connected?.find(({ tool }) => tool.name === call.name);
+  if (connected) {
+    // Whatever an outside server or app sends back is Outside content.
+    state.readOutsideContent = true;
+    yield { type: "status", text: connected.status };
+    try {
+      return await connected.call(call.input);
+    } catch (error) {
+      return `That tool failed: ${(error as Error).message}`;
+    }
+  }
   return `There is no tool called ${call.name}.`;
 }
 

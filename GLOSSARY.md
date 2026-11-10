@@ -180,6 +180,10 @@ _Avoid_: Telegram bot, Discord bot, Slack bot, integration
 
 ### Tools
 
+**MCP server**:
+A server speaking the Model Context Protocol that a Customer connects to a Bot, signing in to it when it asks, so the Bot can use its tools. What its tools send back is Outside content.
+_Avoid_: plugin, connector, integration
+
 **Connected app**:
 An outside app, such as an email or calendar service, that a Customer connects through Composio so a Bot can use it as a tool.
 _Avoid_: integration, connector, Channel app

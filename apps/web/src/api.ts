@@ -75,6 +75,18 @@ export interface Schedule {
   createdBy: "customer" | "bot";
 }
 
+/** An MCP server a Customer connected to a Bot, and its tools. */
+export interface McpServer {
+  id: string;
+  url: string;
+  name: string | null;
+  state: "connected" | "needs_sign_in";
+  /** Where the Customer signs in to the server, right after connecting one that wants it. */
+  signInUrl?: string;
+  /** A tool that only reads runs at once; the rest wait for Approvals, which come later. */
+  tools: Array<{ name: string; description: string; readOnly: boolean }>;
+}
+
 /** The browser's time zone, which the Bot's sense of "now" and "9am" follows. */
 export const BROWSER_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
@@ -233,6 +245,11 @@ export const api = {
   updateSkill: (id: string, change: Partial<SkillFields>) =>
     request<{ skill: Skill }>(`/skills/${id}`, { method: "PATCH", json: change }),
   deleteSkill: (id: string) => request<unknown>(`/skills/${id}`, { method: "DELETE" }),
+  mcpServers: (botId: string) => request<{ servers: McpServer[] }>(`/bots/${botId}/mcp-servers`),
+  connectMcpServer: (botId: string, url: string) =>
+    request<{ server: McpServer }>(`/bots/${botId}/mcp-servers`, { method: "POST", json: { url } }),
+  removeMcpServer: (botId: string, id: string) => request<unknown>(`/bots/${botId}/mcp-servers/${id}`, { method: "DELETE" }),
+
   schedules: (botId: string) => request<{ schedules: Schedule[] }>(`/bots/${botId}/schedules`),
   addSchedule: (botId: string, schedule: { task: string; when: ScheduleRule; timeZone: string }) =>
     request<{ schedule: Schedule }>(`/bots/${botId}/schedules`, { method: "POST", json: schedule }),
