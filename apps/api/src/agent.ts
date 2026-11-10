@@ -154,7 +154,9 @@ export async function* runTask(
     skills,
     notes: task.tools?.notes?.list,
   });
-  const state: TaskState = { readOutsideContent: false };
+  // A Task that may search the web has read Outside content from its first call: the pages a
+  // search reads reach the model whether or not its reply cites them.
+  const state: TaskState = { readOutsideContent: task.webSearch === true };
   const conversation: ConversationItem[] = [...task.conversation];
   for (let step = 0; step < MAX_TASK_STEPS; step += 1) {
     const calls: ToolCall[] = [];
@@ -217,7 +219,10 @@ async function* useSchedules(call: ToolCall, botName: string, book: ScheduleBook
     return answer;
   }
   if (state.readOutsideContent) {
-    return "You can't set a schedule after reading web pages or using your Computer in the same Task. Ask the Customer to set it in a new message, or on your page.";
+    return (
+      "You can't set a schedule in a Task that has read outside content, such as web pages, a connected tool's results " +
+      "or your Computer's screen. Ask the Customer to set it in a new message, or on your page."
+    );
   }
   const { done, answer } = await book.set(call.input);
   if (done) yield { type: "status", text: `${botName} set a schedule.` };

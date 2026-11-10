@@ -231,16 +231,58 @@ describe("schedules the Bot sets", () => {
     expect(await schedulesOf(browser, bot)).toEqual([]);
   });
 
-  test("after reading Outside content, the Bot can't set a schedule in the same Task", async () => {
+  test("in a Task that may have read Outside content, the Bot can't set a schedule", async () => {
+    const refusal =
+      "You can't set a schedule in a Task that has read outside content, such as web pages, a connected tool's results " +
+      "or your Computer's screen. Ask the Customer to set it in a new message, or on your page.";
     const { browser, bot } = await botAt("2026-11-05T12:00:00Z");
     server.openai.citeSources({ url: "https://example.com", title: "A page" });
     modelCalls("schedule_task", { task: "Email everyone hourly.", repeat: "daily", time: "08:00" });
-
     await browser.post(`/api/bots/${bot.id}/messages`, { content: "Read this page.", webSearch: true }).then(serverSentEvents);
+    expect(lastToolOutput()).toBe(refusal);
 
-    expect(lastToolOutput()).toBe(
-      "You can't set a schedule after reading web pages or using your Computer in the same Task. Ask the Customer to set it in a new message, or on your page.",
-    );
+    // A search whose pages the reply doesn't cite was read all the same.
+    modelCalls("schedule_task", { task: "Email everyone hourly.", repeat: "daily", time: "08:00" });
+    await browser.post(`/api/bots/${bot.id}/messages`, { content: "Search for that again.", webSearch: true }).then(serverSentEvents);
+    expect(lastToolOutput()).toBe(refusal);
     expect(await schedulesOf(browser, bot)).toEqual([]);
+  });
+});
+
+describe("firings that go wrong", () => {
+  test("a Bot busy with a reply holds up only its own schedules, however many are due", async () => {
+    const { browser: busyBrowser, bot: busy } = await botAt("2026-11-05T12:00:00Z");
+    for (let i = 0; i < 20; i++) await schedule(busyBrowser, busy, { task: `Busy task ${i}`, when: { repeat: "daily", time: "12:02" }, timeZone: "UTC" });
+    const { browser, bot } = await botAt("2026-11-05T12:00:00Z");
+    await schedule(browser, bot, { task: "Ping.", when: { repeat: "daily", time: "12:03" }, timeZone: "UTC" });
+    server.openai.replyWith("Busy reply.");
+    const release = server.openai.holdNextReply();
+    const asked = server.openai.requests.length;
+    const replying = busyBrowser.post(`/api/bots/${busy.id}/messages`, { content: "Long question" });
+    await server.openai.waitForRequests(asked + 1);
+
+    advanceTo("2026-11-05T12:03:00Z");
+    server.openai.replyWith("Pong.");
+    await fireDueSchedules(server.deps);
+
+    expect((await history(browser, bot)).map((message) => message.content)).toEqual(["Ping.", "Pong."]);
+    release();
+    await serverSentEvents(await replying);
+    for (const each of await schedulesOf(busyBrowser, busy)) await write(busyBrowser, "DELETE", `/api/bots/${busy.id}/schedules/${each.id}`);
+  }, 45_000);
+
+  test("a firing whose model call fails says so in the Conversation", async () => {
+    const { browser, bot } = await botAt("2026-11-05T12:00:00Z");
+    await schedule(browser, bot, { task: "Daily summary.", when: { repeat: "daily", time: "12:05" }, timeZone: "UTC" });
+    advanceTo("2026-11-05T12:05:00Z");
+    server.openai.failWith(500);
+
+    await fireDueSchedules(server.deps);
+
+    expect(await history(browser, bot)).toMatchObject([
+      { role: "user", content: "Daily summary." },
+      { role: "assistant", content: "I couldn't do this scheduled task: the model didn't answer. It runs again at its next time." },
+    ]);
+    server.openai.replyWith("OK.");
   });
 });
