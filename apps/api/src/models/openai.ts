@@ -1,6 +1,15 @@
 import OpenAI from "openai";
 import type { ResponseInputItem, ResponseOutputItem } from "openai/resources/responses/responses";
-import { type ComputerAction, type ConversationItem, type ModelAdapter, ModelError, type ModelEvent } from "./adapter.ts";
+import {
+  type ComputerAction,
+  type ConversationItem,
+  MAX_SEARCHES_PER_CALL,
+  type ModelAdapter,
+  ModelError,
+  type ModelEvent,
+  uniquePages,
+  type WebSource,
+} from "./adapter.ts";
 import { xdotoolKeys } from "./computer-keys.ts";
 
 /** Pixels per wheel click when a scroll comes in pixels. */
@@ -10,13 +19,22 @@ const PIXELS_PER_WHEEL_CLICK = 100;
  * OpenAI's Responses API, through the official SDK (ADR 0005). xAI documents
  * the same SDK against its own Responses API, so this adapter serves xAI too.
  */
-export function createOpenAIAdapter({ apiKey, baseURL }: { apiKey: string; baseURL?: string }): ModelAdapter {
+export function createOpenAIAdapter({
+  apiKey,
+  baseURL,
+  reasoningOptions = true,
+}: {
+  apiKey: string;
+  baseURL?: string;
+  /** Whether to send reasoning options (a summary, an effort): OpenAI's; off for xAI, unchecked there. */
+  reasoningOptions?: boolean;
+}): ModelAdapter {
   // One HTTP attempt per call, never a hidden retry: each attempt gets its own Hold (ADR 0004).
   const client = new OpenAI({ apiKey, baseURL, maxRetries: 0 });
 
   return {
-    async *stream({ model, instructions, conversation, tools, computer }) {
-      const usesTools = (tools?.length ?? 0) > 0 || computer !== undefined;
+    async *stream({ model, instructions, conversation, tools, computer, thinking, webSearch }) {
+      const usesTools = (tools?.length ?? 0) > 0 || computer !== undefined || webSearch === true;
       let events;
       try {
         events = await client.responses.create({
@@ -26,6 +44,10 @@ export function createOpenAIAdapter({ apiKey, baseURL }: { apiKey: string; baseU
           stream: true,
           // Conversations live in our database, not on the Model provider's servers.
           store: false,
+          // A summary of the model's reasoning streams back; thinking harder raises the effort.
+          ...(thinking && reasoningOptions
+            ? { reasoning: { summary: "auto" as const, ...(thinking === "deep" ? { effort: "high" as const } : {}) } }
+            : {}),
           ...(usesTools
             ? {
                 tools: [
@@ -37,7 +59,10 @@ export function createOpenAIAdapter({ apiKey, baseURL }: { apiKey: string; baseU
                     strict: false,
                   })),
                   ...(computer ? [{ type: "computer" as const }] : []),
+                  // OpenAI's web search runs on its side; the reply's text cites what it found.
+                  ...(webSearch ? [{ type: "web_search" as const }] : []),
                 ],
+                ...(webSearch ? { max_tool_calls: MAX_SEARCHES_PER_CALL } : {}),
                 // Not stored at OpenAI, so reasoning comes back encrypted for the Task to replay.
                 include: ["reasoning.encrypted_content" as const],
               }
@@ -53,8 +78,17 @@ export function createOpenAIAdapter({ apiKey, baseURL }: { apiKey: string; baseU
             case "response.output_text.delta":
               yield { type: "text", text: event.delta };
               break;
+            case "response.reasoning_summary_part.added":
+              // Each part of the summary is its own paragraph.
+              if (event.summary_index > 0) yield { type: "thinking", text: "\n\n" };
+              break;
+            case "response.reasoning_summary_text.delta":
+              yield { type: "thinking", text: event.delta };
+              break;
             case "response.completed": {
               const output = event.response.output;
+              const sources = webSources(output);
+              if (sources.length > 0) yield { type: "sources", sources };
               yield* calls(output);
               const usage = event.response.usage;
               if (!usage) {
@@ -167,11 +201,41 @@ function computerActions(action: Record<string, unknown>): ComputerAction[] {
   }
 }
 
+/** The pages the reply's text cites, each once, in the order it first appears. */
+function webSources(output: ResponseOutputItem[]): WebSource[] {
+  const pages: WebSource[] = [];
+  for (const item of output) {
+    if (item.type !== "message") continue;
+    for (const part of item.content) {
+      if (part.type !== "output_text") continue;
+      for (const annotation of part.annotations) {
+        if (annotation.type === "url_citation") pages.push({ url: annotation.url, title: annotation.title || annotation.url });
+      }
+    }
+  }
+  return uniquePages(pages);
+}
+
 /** One conversation item as Responses API input items. */
 function toInput(item: ConversationItem): ResponseInputItem[] {
   switch (item.role) {
     case "user":
     case "assistant":
+      if (item.attachments?.length) {
+        return [
+          {
+            role: item.role,
+            content: [
+              ...(item.content ? [{ type: "input_text", text: item.content }] : []),
+              ...item.attachments.map((file) =>
+                file.mediaType === "application/pdf"
+                  ? { type: "input_file", filename: file.name, file_data: `data:${file.mediaType};base64,${file.data}` }
+                  : { type: "input_image", image_url: `data:${file.mediaType};base64,${file.data}`, detail: "auto" },
+              ),
+            ],
+          } as ResponseInputItem,
+        ];
+      }
       return [
         item.screenshot
           ? ({

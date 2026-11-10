@@ -1,4 +1,4 @@
-import { type Content, Environment, GoogleGenAI, type Part, type Tool } from "@google/genai";
+import { type Content, Environment, GoogleGenAI, type GroundingMetadata, type Part, ThinkingLevel, type Tool } from "@google/genai";
 import {
   type ComputerAction,
   type ComputerCall,
@@ -7,6 +7,7 @@ import {
   type ModelAdapter,
   ModelError,
   type ModelUsage,
+  uniquePages,
 } from "./adapter.ts";
 import { xdotoolKeys } from "./computer-keys.ts";
 
@@ -19,7 +20,7 @@ export function createGoogleAdapter({ apiKey, baseURL }: { apiKey: string; baseU
   const client = new GoogleGenAI({ apiKey, httpOptions: { baseUrl: baseURL, retryOptions: { attempts: 1 } } });
 
   return {
-    async *stream({ model, instructions, conversation, tools, computer }) {
+    async *stream({ model, instructions, conversation, tools, computer, thinking, webSearch }) {
       let usage: ModelUsage[] = [];
       let blocked: string | null = null;
       let finished = false;
@@ -30,20 +31,34 @@ export function createGoogleAdapter({ apiKey, baseURL }: { apiKey: string; baseU
           ? [{ functionDeclarations: tools!.map((tool) => ({ name: tool.name, description: tool.description, parametersJsonSchema: tool.parameters })) }]
           : []),
         ...(computer ? [{ computerUse: { environment: Environment.ENVIRONMENT_DESKTOP } }] : []),
+        // Grounding with Google Search runs on Google's side; the reply's grounding names its sources.
+        ...(webSearch ? [{ googleSearch: {} }] : []),
       ];
+      // Gemini refuses its own tools beside function calling unless told it may use both.
+      const mixesTools = webSearch === true && (tools ?? []).length > 0;
+      let grounding: GroundingMetadata | undefined;
       try {
         const chunks = await client.models.generateContentStream({
           model,
           contents: conversation.map(toContent),
-          config: { systemInstruction: instructions, ...(geminiTools.length > 0 ? { tools: geminiTools } : {}) },
+          config: {
+            systemInstruction: instructions,
+            ...(geminiTools.length > 0 ? { tools: geminiTools } : {}),
+            ...(mixesTools ? { toolConfig: { includeServerSideToolInvocations: true } } : {}),
+            // Its thoughts come back as parts marked `thought`; thinking harder raises the level.
+            ...(thinking
+              ? { thinkingConfig: { includeThoughts: true, ...(thinking === "deep" ? { thinkingLevel: ThinkingLevel.HIGH } : {}) } }
+              : {}),
+          },
         });
         for await (const chunk of chunks) {
           if (chunk.promptFeedback?.blockReason) blocked = chunk.promptFeedback.blockReason;
           const candidate = chunk.candidates?.[0];
           if (candidate?.finishReason) finished = true;
+          if (candidate?.groundingMetadata) grounding = candidate.groundingMetadata;
           for (const part of candidate?.content?.parts ?? []) {
             parts.push(part);
-            if (part.text && !part.thought) yield { type: "text", text: part.text };
+            if (part.text) yield part.thought ? { type: "thinking", text: part.text } : { type: "text", text: part.text };
           }
           if (candidate?.finishReason && candidate.finishReason !== "STOP" && candidate.finishReason !== "MAX_TOKENS") {
             blocked = candidate.finishReason;
@@ -68,6 +83,16 @@ export function createGoogleAdapter({ apiKey, baseURL }: { apiKey: string; baseU
       }
       if (blocked) throw new ModelError(`Gemini stopped the reply (${blocked}).`, { usage });
       if (!finished) throw new ModelError("Gemini's reply was cut off.");
+      // Google's search has no cap to set: its sources are what it grounded the reply on.
+      const sources = uniquePages(
+        (grounding?.groundingChunks ?? []).flatMap((chunk) =>
+          chunk.web?.uri ? [{ url: chunk.web.uri, title: chunk.web.title || chunk.web.domain || chunk.web.uri }] : [],
+        ),
+      );
+      if (sources.length > 0) {
+        const searchSuggestions = grounding?.searchEntryPoint?.renderedContent;
+        yield { type: "sources", sources, ...(searchSuggestions ? { searchSuggestions } : {}) };
+      }
 
       const ours = new Set((tools ?? []).map((tool) => tool.name));
       const computerCall: ComputerCall = { steps: [], safetyChecks: [] };
@@ -169,7 +194,11 @@ function toContent(item: ConversationItem): Content {
     case "user":
       return {
         role: "user",
-        parts: [{ text: item.content }, ...(item.screenshot ? [{ inlineData: { mimeType: "image/png", data: item.screenshot } }] : [])],
+        parts: [
+          ...(item.content || !item.attachments?.length ? [{ text: item.content }] : []),
+          ...(item.screenshot ? [{ inlineData: { mimeType: "image/png", data: item.screenshot } }] : []),
+          ...(item.attachments ?? []).map((file) => ({ inlineData: { mimeType: file.mediaType, data: file.data } })),
+        ],
       };
     case "assistant":
       return { role: "model", parts: [{ text: item.content }] };

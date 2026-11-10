@@ -154,6 +154,10 @@ _Avoid_: integration, platform, connector
 A Bot's running exchange of messages on one Channel. On the web Channel each Bot has one, and it survives a reload.
 _Avoid_: thread, session, chat history
 
+**Attachment**:
+A file a Customer sends a Bot with a message: an image, a PDF or a text file. It stays with the message.
+_Avoid_: upload, file (on its own)
+
 **Channel app**:
 The app a Customer registers with Telegram, Discord or Slack and connects on our website. Their Bot talks on that Channel through it.
 _Avoid_: Telegram bot, Discord bot, Slack bot, integration

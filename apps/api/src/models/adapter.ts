@@ -6,9 +6,20 @@ export type ModelProvider = "openai" | "anthropic" | "google" | "xai" | "openrou
 /** A message as Model providers see it: the person's words, or the Bot's. */
 export interface ChatMessage {
   role: "user" | "assistant";
+  /** May be empty when the message is files alone. */
   content: string;
   /** A Driver model's task comes with the screen as it is, as base64 PNG. */
   screenshot?: string;
+  /** Files the Customer sent with the message, for the model to see as themselves. Text files arrive as text in `content`. */
+  attachments?: FileForModel[];
+}
+
+/** A file a model sees natively: an image, or a PDF. */
+export interface FileForModel {
+  name: string;
+  mediaType: "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "application/pdf";
+  /** The file, base64. */
+  data: string;
 }
 
 /** A function our own code runs when the model calls it, such as handing work to the Bot's Computer. */
@@ -91,7 +102,34 @@ export interface ModelRequest {
   tools?: FunctionTool[];
   /** Gives a Driver model its Model provider's computer-use tool, for a screen this size. */
   computer?: { width: number; height: number };
+  /**
+   * Asks the model to think where it can, and to stream what it thinks as "thinking"
+   * events; "deep" asks it to think harder. Unset for Driver models, which work unseen.
+   */
+  thinking?: ThinkingEffort;
+  /**
+   * Gives the model its Model provider's own web search, a few searches per call at most;
+   * the pages its reply draws on come back as a "sources" event.
+   */
+  webSearch?: boolean;
 }
+
+/** How hard a model thinks: as it sees fit, or harder ("think deeper"). */
+export type ThinkingEffort = "normal" | "deep";
+
+/** A web page a reply draws on. */
+export interface WebSource {
+  url: string;
+  title: string;
+}
+
+/** Each page once, in the order it first appears. */
+export function uniquePages(pages: WebSource[]): WebSource[] {
+  return pages.filter((page, index) => pages.findIndex((other) => other.url === page.url) === index);
+}
+
+/** The most web searches one model call may make: a ceiling on what a call can cost. */
+export const MAX_SEARCHES_PER_CALL = 5;
 
 /**
  * One billed attempt's usage, in one shape for every Model provider, which
@@ -118,6 +156,13 @@ export interface ModelUsage {
 
 export type ModelEvent =
   | { type: "text"; text: string }
+  /** A piece of what the model thinks before and between its answers, as its Model provider shows it. */
+  | { type: "thinking"; text: string }
+  /**
+   * The web pages the reply draws on, once, after it. Google asks apps to show its search
+   * suggestions with grounded replies: `searchSuggestions` is that HTML, as Google sent it.
+   */
+  | { type: "sources"; sources: WebSource[]; searchSuggestions?: string }
   | { type: "tool_call"; call: ToolCall }
   | { type: "computer_call"; call: ComputerCall }
   /**
@@ -126,7 +171,13 @@ export type ModelEvent =
    * evidence. `turn` is the whole answer in the Model provider's own shape, for
    * the next call in the same Task to replay.
    */
-  | { type: "done"; usage: ModelUsage[]; turn: unknown };
+  | {
+      type: "done";
+      usage: ModelUsage[];
+      turn: unknown;
+      /** The Model provider paused the answer part-way (Anthropic's pause_turn): send `turn` back to carry on. */
+      paused?: boolean;
+    };
 
 export interface ModelAdapter {
   /** One call to the Model provider: a single HTTP attempt, streamed. Throws ModelError if it fails. */

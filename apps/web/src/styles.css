@@ -921,7 +921,176 @@ select:disabled {
 
 .message.user {
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+/* Files on the Customer's messages: images as pictures, others as chips that download. */
+.user-files {
+  max-width: min(620px, 85%);
+  display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 8px;
+}
+
+.file-thumb img {
+  display: block;
+  max-width: 220px;
+  max-height: 180px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  object-fit: cover;
+}
+
+.file-chip {
+  max-width: 260px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.file-chip:hover {
+  border-color: var(--accent);
+}
+
+.file-chip-name,
+.picked-name,
+.source-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-chip-size,
+.picked-size {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+/* What the model thought before it answered: open while it thinks, folded away after. */
+.thinking {
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.thinking summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-weight: 500;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.thinking summary::-webkit-details-marker {
+  display: none;
+}
+
+.thinking summary::after {
+  content: "›";
+  font-size: 1.1em;
+  transition: transform 0.15s;
+}
+
+.thinking[open] summary {
+  margin-bottom: 6px;
+}
+
+.thinking[open] summary::after {
+  transform: rotate(90deg);
+}
+
+.thinking summary .logo-mark {
+  width: 8px;
+  height: 8px;
+  box-shadow: none;
+}
+
+.thinking-text {
+  max-height: 320px;
+  overflow-y: auto;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+/* The pages a reply drew on. */
+.sources {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.sources-label {
+  color: var(--faint);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.source-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.source {
+  max-width: 280px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-soft);
+  font-size: 0.8125rem;
+  text-decoration: none;
+}
+
+.source:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.source-index {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--subtle);
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.search-suggestions {
+  width: 100%;
+  height: 64px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
 }
 
 .user-text {
@@ -1036,11 +1205,11 @@ select:disabled {
   max-width: 780px;
   margin: 0 auto;
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 9px 9px 9px 18px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 10px 8px 14px;
   border: 1px solid var(--border-strong);
-  border-radius: 26px;
+  border-radius: 22px;
   background: var(--surface);
   box-shadow: var(--shadow);
   transition:
@@ -1055,10 +1224,87 @@ select:disabled {
     0 0 0 3px var(--accent-soft);
 }
 
+.composer.dragging {
+  border-style: dashed;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Under the words: attach, think deeper, search the web, send. */
+.composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: -4px;
+}
+
+.composer-tools .send-button {
+  margin-left: auto;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+
+.toggle:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.toggle.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Files picked to send, above the words. */
+.picked {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.picked-file {
+  max-width: 240px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--subtle);
+  font-size: 0.8125rem;
+}
+
+.picked-thumb {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
 .composer textarea {
   flex: 1;
   max-height: 220px;
-  padding: 8px 0;
+  padding: 6px 4px 2px;
   border: 0;
   background: transparent;
   font-size: 1rem;
@@ -1464,8 +1710,14 @@ select:disabled {
     padding: 6px 12px 12px;
   }
 
-  .computer-toggle-label {
+  .computer-toggle-label,
+  .toggle-label,
+  .composer-hint {
     display: none;
+  }
+
+  .toggle {
+    padding: 7px;
   }
 
   .model-chip {
