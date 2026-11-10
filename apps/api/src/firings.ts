@@ -13,9 +13,10 @@ interface DueSchedule {
 }
 
 /**
- * Runs every schedule that is due, each as one Task in its Bot's web Conversation, one after
- * another. A schedule missed while the Bot service was down runs once, now; one whose Bot is
- * still replying waits for the next sweep. The Bot service calls this every FIRING_SWEEP_MS.
+ * Runs the schedules that are due, each as one Task in its Bot's web Conversation, side by side,
+ * so one long Task doesn't make the others late. A schedule missed while the Bot service was
+ * down runs once, now. One whose Bot is still replying is left for a later sweep, and doesn't
+ * take the place of anyone else's. The Bot service calls this every FIRING_SWEEP_MS.
  */
 export async function fireDueSchedules(deps: AppDeps): Promise<void> {
   const { rows } = await deps.db.query<DueSchedule>(
@@ -23,17 +24,21 @@ export async function fireDueSchedules(deps: AppDeps): Promise<void> {
        json_build_object('id', b.id, 'name', b.name, 'instructions', b.instructions, 'model', b.model) AS bot
      FROM schedules s JOIN bots b ON b.id = s.bot_id
      WHERE s.enabled AND s.next_run_at <= $1
+       AND NOT EXISTS (
+         SELECT 1 FROM conversations c
+         WHERE c.bot_id = s.bot_id AND c.channel = 'web' AND c.replying_since > $1::timestamptz - interval '5 minutes'
+       )
      ORDER BY s.next_run_at LIMIT 20`,
     [deps.now()],
   );
-  for (const due of rows) {
-    try {
-      await fire(deps, due);
-    } catch (error) {
-      // One schedule that fails doesn't stop the others.
-      console.error(`Schedule ${due.id}: the firing failed`, error);
-    }
-  }
+  await Promise.all(
+    rows.map((due) =>
+      fire(deps, due).catch((error: unknown) => {
+        // One schedule that fails doesn't stop the others.
+        console.error(`Schedule ${due.id}: the firing failed`, error);
+      }),
+    ),
+  );
 }
 
 async function fire(deps: AppDeps, due: DueSchedule): Promise<void> {
@@ -62,12 +67,24 @@ async function fire(deps: AppDeps, due: DueSchedule): Promise<void> {
       await stopReplying(deps.db, conversationId);
       return;
     }
-    // Nobody is watching: the reply is saved in the Conversation for the Customer to read.
+    // Nobody is watching: the reply is saved in the Conversation for the Customer to read. A
+    // firing that fails before the model writes anything says so there too.
+    let wrote = false;
+    let failure: { code: string; message: string } | null = null;
     await runReply(
       deps,
       { bot: due.bot, model, adapter, conversationId, thinking: "normal", webSearch: false, timeZone: due.timeZone },
-      async () => {},
+      async (event, data) => {
+        if (event === "delta") wrote = true;
+        if (event === "error") failure = data as { code: string; message: string };
+      },
     );
+    if (failure && !wrote) {
+      const { code, message } = failure as { code: string; message: string };
+      const why = code === "model_failed" ? "the model didn't answer" : message.replace(/.$/, "");
+      const again = next ? " It runs again at its next time." : "";
+      await addMessage(deps.db, conversationId, "assistant", `I couldn't do this scheduled task: ${why}.${again}`, deps.now());
+    }
   } catch (error) {
     await stopReplying(deps.db, conversationId);
     throw error;

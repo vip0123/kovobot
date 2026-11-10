@@ -133,7 +133,7 @@ function Memory({ bot, conversationLength }: { bot: Bot; conversationLength: num
         <p className="muted small">Loading…</p>
       ) : (
         <>
-          {notes.length === 0 && <p className="memory-empty small">No notes yet. Tell {bot.name} something worth remembering, or add one here.</p>}
+          {notes.length === 0 && <p className="empty-list small">No notes yet. Tell {bot.name} something worth remembering, or add one here.</p>}
           <ul className="notes">
             {notes.map((note) =>
               editing?.id === note.id ? (

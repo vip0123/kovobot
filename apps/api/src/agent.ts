@@ -158,7 +158,9 @@ export async function* runTask(
     skills,
     notes: task.tools?.notes?.list,
   });
-  const state: TaskState = { readOutsideContent: false };
+  // A Task that may search the web has read Outside content from its first call: the pages a
+  // search reads reach the model whether or not its reply cites them.
+  const state: TaskState = { readOutsideContent: task.webSearch === true };
   const conversation: ConversationItem[] = [...task.conversation];
   for (let step = 0; step < MAX_TASK_STEPS; step += 1) {
     const calls: ToolCall[] = [];
@@ -232,7 +234,10 @@ async function* useSchedules(call: ToolCall, botName: string, book: ScheduleBook
     return answer;
   }
   if (state.readOutsideContent) {
-    return "You can't set a schedule after reading web pages or using your Computer in the same Task. Ask the Customer to set it in a new message, or on your page.";
+    return (
+      "You can't set a schedule in a Task that has read outside content, such as web pages, a connected tool's results " +
+      "or your Computer's screen. Ask the Customer to set it in a new message, or on your page."
+    );
   }
   const { done, answer } = await book.set(call.input);
   if (done) yield { type: "status", text: `${botName} set a schedule.` };
@@ -241,20 +246,26 @@ async function* useSchedules(call: ToolCall, botName: string, book: ScheduleBook
 
 /** Adds, changes or forgets one of the Bot's notes, as the model asked. */
 async function* writeNote(call: ToolCall, botName: string, book: Notebook, state: TaskState): AsyncGenerator<TaskEvent, string> {
+  const action = NOTE_ACTIONS[call.name]!;
   const content = typeof call.input.note === "string" ? call.input.note : "";
   const id = Number(call.input.id);
   if (call.name !== "remember" && !(Number.isSafeInteger(id) && id > 0)) return "Say which note, by its number.";
-  const { done, answer } =
-    call.name === "remember"
-      ? await book.remember(content, state.readOutsideContent)
-      : call.name === "change_note"
-        ? await book.change(id, content, state.readOutsideContent)
-        : await book.forget(id);
-  if (done) {
-    const what = call.name === "remember" ? "made a note" : call.name === "change_note" ? "changed a note" : "forgot a note";
-    yield { type: "status", text: `${botName} ${what}.` };
-  }
+  const { done, answer } = await action.run(book, { id, content, afterOutsideContent: state.readOutsideContent });
+  if (done) yield { type: "status", text: `${botName} ${action.said}.` };
   return answer;
+}
+
+/** What each note tool does, and what the Customer is told it did. */
+const NOTE_ACTIONS: Record<string, { said: string; run: (book: Notebook, given: NoteGiven) => ReturnType<Notebook["forget"]> }> = {
+  remember: { said: "made a note", run: (book, { content, afterOutsideContent }) => book.remember(content, afterOutsideContent) },
+  change_note: { said: "changed a note", run: (book, { id, content, afterOutsideContent }) => book.change(id, content, afterOutsideContent) },
+  forget_note: { said: "forgot a note", run: (book, { id }) => book.forget(id) },
+};
+
+interface NoteGiven {
+  id: number;
+  content: string;
+  afterOutsideContent: boolean;
 }
 
 /** One of the Bot's Skills in full, by the name it asked for. */

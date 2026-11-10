@@ -1,7 +1,7 @@
 import { type Context, Hono } from "hono";
 import type { Db } from "@kovobot/db";
 import type { AppDeps } from "./app.ts";
-import type { Customer } from "./customers.ts";
+import { type Customer, ownBotOnly } from "./customers.ts";
 import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
 
 /** When a schedule runs, on the wall clock of its time zone. */
@@ -42,7 +42,7 @@ const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Frida
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-type Env = { Variables: { customer: Customer } };
+type Env = { Variables: { customer: Customer; botId: string } };
 
 /**
  * A Bot's schedules, under /bots/:id/schedules, for the Customer to see, set, change, switch
@@ -51,21 +51,14 @@ type Env = { Variables: { customer: Customer } };
 export function scheduleRoutes(deps: AppDeps) {
   const routes = new Hono<Env>();
 
-  const ownBot = async (c: Context<Env>) => {
-    const botId = c.req.param("id") ?? "";
-    if (!UUID_PATTERN.test(botId)) return null;
-    const { rowCount } = await deps.db.query("SELECT 1 FROM bots WHERE id = $1 AND customer_id = $2", [botId, c.get("customer").id]);
-    return rowCount === 1 ? botId : null;
-  };
+  routes.use("*", ownBotOnly(deps.db));
 
   routes.get("/", async (c) => {
-    const botId = await ownBot(c);
-    return botId ? c.json({ schedules: await listSchedules(deps.db, botId) }) : botNotFound(c);
+    return c.json({ schedules: await listSchedules(deps.db, c.get("botId")) });
   });
 
   routes.post("/", async (c) => {
-    const botId = await ownBot(c);
-    if (!botId) return botNotFound(c);
+    const botId = c.get("botId");
     const body = await jsonBody(c);
     const made = await addSchedule(deps, botId, { task: body.task, when: body.when, timeZone: body.timeZone }, "customer");
     if ("error" in made) return made.full ? apiError(c, 409, "too_many_schedules", made.error) : invalidSchedule(c, made.error);
@@ -74,8 +67,7 @@ export function scheduleRoutes(deps: AppDeps) {
 
   // Changes what it does or when, or switches it off or on. Switched on, it runs next time round.
   routes.patch("/:scheduleId", async (c) => {
-    const botId = await ownBot(c);
-    if (!botId) return botNotFound(c);
+    const botId = c.get("botId");
     const current = await findSchedule(deps.db, botId, c.req.param("scheduleId"));
     if (!current) return scheduleNotFound(c);
     const body = await jsonBody(c);
@@ -97,8 +89,7 @@ export function scheduleRoutes(deps: AppDeps) {
   });
 
   routes.delete("/:scheduleId", async (c) => {
-    const botId = await ownBot(c);
-    if (!botId) return botNotFound(c);
+    const botId = c.get("botId");
     const scheduleId = c.req.param("scheduleId");
     if (!UUID_PATTERN.test(scheduleId)) return scheduleNotFound(c);
     const { rowCount } = await deps.db.query("DELETE FROM schedules WHERE id = $2 AND bot_id = $1", [botId, scheduleId]);
@@ -353,10 +344,6 @@ async function findSchedule(db: Db, botId: string, scheduleId: string): Promise<
   if (!UUID_PATTERN.test(scheduleId)) return null;
   const { rows } = await db.query<Schedule>(`SELECT ${SCHEDULE_COLUMNS} FROM schedules WHERE id = $2 AND bot_id = $1`, [botId, scheduleId]);
   return rows[0] ?? null;
-}
-
-function botNotFound(c: Context) {
-  return apiError(c, 404, "bot_not_found", "There's no such Bot.");
 }
 
 function scheduleNotFound(c: Context) {
