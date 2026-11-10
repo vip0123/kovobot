@@ -2,25 +2,18 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
 import { type Db, transaction } from "@kovobot/db";
-import { runTask } from "./agent.ts";
 import type { AppDeps } from "./app.ts";
-import {
-  ATTACHMENTS_COLUMN,
-  type AttachmentInfo,
-  conversationForModel,
-  findAttachment,
-  readAttachments,
-  saveAttachments,
-} from "./attachments.ts";
+import { findAttachment, readAttachments, saveAttachments } from "./attachments.ts";
 import { sessionCustomer } from "./auth/sessions.ts";
 import { computerRoutes, computerSizes, deleteBotComputer } from "./computer-routes.ts";
-import { driveComputer, drivingFor } from "./driver.ts";
+import { addMessage, listMessages, type Message, startReplying, stopReplying, webConversation } from "./conversations.ts";
 import type { Customer } from "./customers.ts";
 import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
-import { type ModelAdapters, ModelError, type ModelProvider, uniquePages, type WebSource } from "./models/adapter.ts";
+import type { ModelAdapters, ModelProvider } from "./models/adapter.ts";
 import { describeModel, MODELS, type ModelInfo } from "./models/catalog.ts";
-import { botNotes, notebook, noteRoutes } from "./notes.ts";
-import { botSkills, skillInstructions, skillRoutes } from "./skills.ts";
+import { noteRoutes } from "./notes.ts";
+import { runReply } from "./replies.ts";
+import { skillRoutes } from "./skills.ts";
 
 export interface Bot {
   id: string;
@@ -36,9 +29,6 @@ export interface Bot {
 /** Driver models come only from the Model providers with a computer-use tool. */
 const DRIVER_PROVIDERS = new Set(["openai", "anthropic", "google"]);
 
-/** The Model providers a PDF isn't sent to (unchecked for xAI, unlikely on a local server): the model is told one came. */
-const MODEL_PROVIDERS_WITHOUT_PDFS: ReadonlySet<ModelProvider> = new Set(["xai", "local"]);
-
 /** The Model providers whose own web search a Bot can use; xAI's is unchecked here, local servers have none. */
 const SEARCHING_PROVIDERS: readonly ModelProvider[] = ["openai", "anthropic", "google", "openrouter"];
 
@@ -51,32 +41,9 @@ function webSearchProviders(deps: Pick<AppDeps, "config" | "models">): ModelProv
   return SEARCHING_PROVIDERS.filter((provider) => deps.models[provider] !== null);
 }
 
-export interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  /** What the model thought before this reply, as its Model provider showed it; null for none. */
-  thinking: string | null;
-  /** The web pages this reply drew on, from its Model provider's web search; null for none. */
-  sources: WebSource[] | null;
-  /** Google's search suggestions for a reply grounded with Google Search, as Google's HTML. */
-  searchSuggestions: string | null;
-  /** Files the Customer sent with this message. */
-  attachments: AttachmentInfo[];
-  createdAt: Date;
-}
-
 const MAX_NAME_LENGTH = 80;
 const MAX_INSTRUCTIONS_LENGTH = 8_000;
 const MAX_MESSAGE_LENGTH = 20_000;
-/** The most of a conversation's latest messages the model sees. */
-const MESSAGES_SENT_TO_MODEL = 50;
-/**
- * The model's window onto a long conversation moves on in steps of this many
- * messages, not one per message. Between steps the start of what it sees stays
- * the same, so Model providers read it back from their prompt cache.
- */
-const WINDOW_STEP = 20;
 
 /** Bots, and chatting with them on the web Channel. Every route needs a signed-in Customer. */
 export function botRoutes(deps: AppDeps) {
@@ -205,16 +172,12 @@ export function botRoutes(deps: AppDeps) {
     if (!(await startReplying(deps.db, conversationId, deps.now()))) {
       return apiError(c, 409, "bot_busy", `${bot.name} is still answering the last message.`);
     }
-    let conversation;
     let sent: Message;
     try {
       // The message and its Attachments are kept together, or not at all.
       sent = await transaction(deps.db, async (client) => {
         const message = await addMessage(client, conversationId, "user", text, deps.now());
         return { ...message, attachments: await saveAttachments(client, message.id, files, deps.now()) };
-      });
-      conversation = await conversationForModel(deps.db, await recentMessages(deps.db, conversationId), {
-        pdfs: !MODEL_PROVIDERS_WITHOUT_PDFS.has(model.provider),
       });
     } catch (error) {
       await stopReplying(deps.db, conversationId);
@@ -228,99 +191,12 @@ export function botRoutes(deps: AppDeps) {
       };
       // The Customer's message as saved, so the page can link its Attachments straight away.
       await send("sent", { message: sent });
-      let reply = "";
-      let thinking = "";
-      // A Task may search in more than one model call: every page once.
-      const cited: { sources: WebSource[]; searchSuggestions?: string } = { sources: [] };
-      // The reply holds the conversation for as long as it runs, however long that is.
-      const renewing = setInterval(
-        () => void renewReplying(deps.db, conversationId, deps.now()).catch((error: unknown) => console.error(error)),
-        RENEW_REPLY_CLAIM_MS,
-      );
-      try {
-        const driving = await drivingFor(deps, bot.id);
-        const skills = await botSkills(deps.db, bot.id);
-        const tools = {
-          ...(driving ? { useComputer: (task: string) => driveComputer(deps, driving, task) } : {}),
-          ...(skills.length > 0 ? { skills: { list: skills, read: (name: string) => skillInstructions(deps.db, bot.id, name) } } : {}),
-          notes: { list: await botNotes(deps.db, bot.id), book: notebook(deps.db, bot.id, deps.now) },
-        };
-        const task = {
-          botName: bot.name,
-          instructions: bot.instructions,
-          model: model.id,
-          conversation,
-          tools,
-          thinking: thinkHarder === true ? ("deep" as const) : ("normal" as const),
-          webSearch: searchesTheWeb,
-        };
-        // A Task may make several model calls; each one's thinking starts a new paragraph.
-        let callEnded = false;
-        for await (const event of runTask(adapter, task)) {
-          if (event.type === "status") await send("status", { text: event.text });
-          if (event.type === "done") callEnded = true;
-          if (event.type === "thinking") {
-            const text = thinking && callEnded ? `\n\n${event.text}` : event.text;
-            callEnded = false;
-            thinking += text;
-            await send("thinking", { text });
-          }
-          if (event.type === "sources") {
-            cited.sources = uniquePages([...cited.sources, ...event.sources]);
-            cited.searchSuggestions = event.searchSuggestions ?? cited.searchSuggestions;
-            await send("sources", { sources: event.sources, ...(event.searchSuggestions ? { searchSuggestions: event.searchSuggestions } : {}) });
-          }
-          if (event.type !== "text") continue;
-          reply += event.text;
-          await send("delta", { text: event.text });
-        }
-        // An empty reply would break the conversation for Model providers that refuse empty turns.
-        if (!reply.trim()) throw new Error("The model's reply was empty.");
-        const message = await addMessage(deps.db, conversationId, "assistant", reply, deps.now(), { thinking, cited });
-        await send("done", { message });
-      } catch (error) {
-        console.error(`Bot ${bot.id}: the model call failed`, error);
-        // Keep what the Customer already saw, so a reload shows the same conversation.
-        if (reply) await addMessage(deps.db, conversationId, "assistant", reply, deps.now(), { thinking, cited });
-        await send(
-          "error",
-          error instanceof ModelError && error.keyRefused
-            ? keyRefused(deps, model)
-            : { code: "model_failed", message: "The model didn't answer. Try again in a moment." },
-        );
-      } finally {
-        clearInterval(renewing);
-        await stopReplying(deps.db, conversationId);
-      }
+      const thinking = thinkHarder === true ? ("deep" as const) : ("normal" as const);
+      await runReply(deps, { bot, model, adapter, conversationId, thinking, webSearch: searchesTheWeb }, send);
     });
   });
 
   return routes;
-}
-
-/** Each Model provider's name, and the setting its key comes from (packages/config). */
-const KEY_SETTINGS: Record<ModelProvider, { provider: string; setting: string }> = {
-  openai: { provider: "OpenAI", setting: "OPENAI_API_KEY" },
-  anthropic: { provider: "Anthropic", setting: "ANTHROPIC_API_KEY" },
-  google: { provider: "Google", setting: "GEMINI_API_KEY" },
-  xai: { provider: "xAI", setting: "XAI_API_KEY" },
-  openrouter: { provider: "OpenRouter", setting: "OPENROUTER_API_KEY" },
-  local: { provider: "The local model server", setting: "OPENAI_COMPATIBLE_BASE_URL" },
-};
-
-/**
- * What to say when the Model provider refused the key. Self-hosted, the key is the Operator's
- * setting, so name it; hosted, it's ours, so the Customer just hears the model is unavailable.
- */
-function keyRefused(deps: AppDeps, model: ModelInfo) {
-  if (deps.config.mode === "hosted") {
-    return { code: "model_unavailable", message: `${model.name} isn't available right now. Pick another model, or try later.` };
-  }
-  const { provider, setting } = KEY_SETTINGS[model.provider];
-  return {
-    code: "model_key_refused",
-    message: `${provider} refused this Kovobot's key, so trying again won't help. Whoever runs it needs to fix ${setting} and restart.`,
-  };
 }
 
 function botNotFound(c: Parameters<typeof apiError>[0]) {
@@ -419,99 +295,3 @@ async function deleteBot(db: Db, customerId: string, botId: string): Promise<boo
   return rowCount === 1;
 }
 
-/** The Bot's one conversation on the web Channel, started on first use. */
-async function webConversation(db: Db, botId: string, now: Date): Promise<string> {
-  const { rows } = await db.query<{ id: string }>(
-    `WITH created AS (
-       INSERT INTO conversations (bot_id, channel, created_at) VALUES ($1, 'web', $2)
-       ON CONFLICT (bot_id) WHERE channel = 'web' DO NOTHING
-       RETURNING id
-     )
-     SELECT id FROM created
-     UNION ALL
-     SELECT id FROM conversations WHERE bot_id = $1 AND channel = 'web'
-     LIMIT 1`,
-    [botId, now],
-  );
-  return rows[0]!.id;
-}
-
-const MESSAGE_COLUMNS = `id::text, role, content, thinking, sources, search_suggestions AS "searchSuggestions",
-  ${ATTACHMENTS_COLUMN}, created_at AS "createdAt"`;
-
-async function listMessages(db: Db, conversationId: string): Promise<Message[]> {
-  const { rows } = await db.query<Message>(
-    `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id = $1 ORDER BY messages.id`,
-    [conversationId],
-  );
-  return rows;
-}
-
-/**
- * What the model sees of the conversation, oldest first: no more than the
- * latest MESSAGES_SENT_TO_MODEL, so a long conversation never outgrows it,
- * starting at a WINDOW_STEP and on the Customer's message, as Model providers expect.
- */
-async function recentMessages(db: Db, conversationId: string): Promise<Message[]> {
-  const { rows: counted } = await db.query<{ count: number }>(
-    "SELECT count(*)::int AS count FROM messages WHERE conversation_id = $1",
-    [conversationId],
-  );
-  const start = Math.ceil(Math.max(0, counted[0]!.count - MESSAGES_SENT_TO_MODEL) / WINDOW_STEP) * WINDOW_STEP;
-  const { rows } = await db.query<Message>(
-    `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id = $1 ORDER BY messages.id OFFSET $2 LIMIT $3`,
-    [conversationId, start, MESSAGES_SENT_TO_MODEL],
-  );
-  while (rows[0]?.role === "assistant") rows.shift();
-  return rows;
-}
-
-/**
- * How often a reply in progress renews its claim on the conversation. A claim not renewed for
- * 5 minutes is one whose server stopped mid-reply, and the next message may take it over.
- */
-const RENEW_REPLY_CLAIM_MS = 60_000;
-
-/** Claims the conversation for one reply. False while another reply is under way. */
-async function startReplying(db: Db, conversationId: string, now: Date): Promise<boolean> {
-  const { rowCount } = await db.query(
-    `UPDATE conversations SET replying_since = $2
-     WHERE id = $1 AND (replying_since IS NULL OR replying_since < $2::timestamptz - interval '5 minutes')`,
-    [conversationId, now],
-  );
-  return rowCount === 1;
-}
-
-/** Renews a reply's claim, which it holds until it stops. */
-async function renewReplying(db: Db, conversationId: string, now: Date): Promise<void> {
-  await db.query("UPDATE conversations SET replying_since = $2 WHERE id = $1 AND replying_since IS NOT NULL", [conversationId, now]);
-}
-
-async function stopReplying(db: Db, conversationId: string): Promise<void> {
-  await db.query("UPDATE conversations SET replying_since = NULL WHERE id = $1", [conversationId]);
-}
-
-async function addMessage(
-  db: Pick<Db, "query">,
-  conversationId: string,
-  role: Message["role"],
-  content: string,
-  now: Date,
-  extras: { thinking?: string; cited?: { sources: WebSource[]; searchSuggestions?: string } } = {},
-): Promise<Message> {
-  const { rows } = await db.query<Message>(
-    `INSERT INTO messages (conversation_id, role, content, thinking, sources, search_suggestions, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING ${MESSAGE_COLUMNS}`,
-    [
-      conversationId,
-      role,
-      content,
-      extras.thinking || null,
-      extras.cited?.sources.length ? JSON.stringify(extras.cited.sources) : null,
-      extras.cited?.searchSuggestions ?? null,
-      now,
-    ],
-  );
-  return rows[0]!;
-}
