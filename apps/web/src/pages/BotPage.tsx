@@ -113,7 +113,12 @@ function BotChat({ id }: { id: string }) {
         )}
         {drawer === "customize" && (
           <aside className="side-drawer" aria-label={`Customize ${bot.name}`}>
-            <CustomizePanel bot={bot} onBotChange={saveBot} onClose={() => setDrawer(null)} />
+            <CustomizePanel
+              bot={bot}
+              conversationLength={messages?.length ?? 0}
+              onBotChange={saveBot}
+              onClose={() => setDrawer(null)}
+            />
           </aside>
         )}
       </div>

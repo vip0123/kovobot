@@ -1985,9 +1985,8 @@ select:disabled {
 /* A Bot's Skills, in its Customize panel */
 .skill-grants {
   margin: 0;
-  padding: 18px 0 0;
+  padding: 0;
   border: 0;
-  border-top: 1px solid var(--border);
 }
 
 .skill-grant {
@@ -2006,4 +2005,103 @@ select:disabled {
 
 .skill-grant-name {
   font-weight: 600;
+}
+
+/* Tabs in a side panel */
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-top: -4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  margin-bottom: -1px;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab.active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+/* A Bot's memory: its notes */
+.memory-empty {
+  margin: 0;
+  padding: 16px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.notes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.note {
+  padding: 10px 12px 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.note.flagged {
+  border-color: var(--warning);
+}
+
+.note.editing {
+  padding-bottom: 10px;
+}
+
+.note-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.note-flag {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.note-foot {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.note-foot > span {
+  margin-right: auto;
+}
+
+.note-add {
+  display: flex;
+  gap: 8px;
+}
+
+.note-add input {
+  flex: 1;
+  padding-top: 7px;
+  padding-bottom: 7px;
 }

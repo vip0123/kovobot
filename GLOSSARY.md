@@ -114,6 +114,10 @@ _Avoid_: system prompt, persona, custom instructions
 Instructions a Customer writes once for one kind of work, such as a weekly report, and gives to any of their Bots. A Bot sees each of its Skills' names and when to use them, and reads a Skill in full when it applies.
 _Avoid_: plugin, prompt, template, GPT
 
+**Note**:
+Something a Bot keeps in mind across Conversations, such as a Customer's preference or a decision, in a sentence or two. The Bot writes its own notes as it works; the Customer sees, edits and deletes them. A Bot's notes are its memory.
+_Avoid_: memory item, fact, memo
+
 **Bot service**:
 Our main service: the website, the API, the agent loop, Channels, model adapters and MCP. It runs every Customer's Bots.
 _Avoid_: the Bot (meaning the software), backend, core

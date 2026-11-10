@@ -19,6 +19,7 @@ import type { Customer } from "./customers.ts";
 import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
 import { type ModelAdapters, ModelError, type ModelProvider, uniquePages, type WebSource } from "./models/adapter.ts";
 import { describeModel, MODELS, type ModelInfo } from "./models/catalog.ts";
+import { botNotes, notebook, noteRoutes } from "./notes.ts";
 import { botSkills, skillInstructions, skillRoutes } from "./skills.ts";
 
 export interface Bot {
@@ -149,6 +150,7 @@ export function botRoutes(deps: AppDeps) {
 
   routes.route("/bots/:id/computer", computerRoutes(deps));
   routes.route("/", skillRoutes(deps));
+  routes.route("/bots/:id/notes", noteRoutes(deps));
 
   routes.get("/bots/:id/messages", async (c) => {
     const bot = await findBot(deps.db, c.get("customer").id, c.req.param("id"));
@@ -241,6 +243,7 @@ export function botRoutes(deps: AppDeps) {
         const tools = {
           ...(driving ? { useComputer: (task: string) => driveComputer(deps, driving, task) } : {}),
           ...(skills.length > 0 ? { skills: { list: skills, read: (name: string) => skillInstructions(deps.db, bot.id, name) } } : {}),
+          notes: { list: await botNotes(deps.db, bot.id), book: notebook(deps.db, bot.id, deps.now) },
         };
         const task = {
           botName: bot.name,

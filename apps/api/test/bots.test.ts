@@ -113,7 +113,7 @@ describe("web search", () => {
 
     const events = await send(browser, bot, { content: "Which Node.js is current?", webSearch: true });
 
-    expect(server.openai.requests.at(-1)!.tools).toEqual([{ type: "web_search" }]);
+    expect(server.openai.requests.at(-1)!.tools).toContainEqual({ type: "web_search" });
     expect(dataOf(events, "sources")).toEqual([{ sources: SOURCES }]);
     expect(await history(browser, bot)).toMatchObject([
       { role: "user", sources: null },
@@ -121,7 +121,7 @@ describe("web search", () => {
     ]);
 
     await chat(browser, bot, "Thanks.");
-    expect(server.openai.requests.at(-1)).not.toHaveProperty("tools");
+    expect(server.openai.requests.at(-1)!.tools ?? []).not.toContainEqual({ type: "web_search" });
   });
 
   test("a model whose Model provider has no web search here says so, and nothing is sent", async () => {

@@ -100,6 +100,18 @@ export interface Skill {
 
 export type SkillFields = Pick<Skill, "name" | "description" | "instructions">;
 
+/** Something a Bot keeps in mind across Conversations. */
+export interface Note {
+  id: string;
+  content: string;
+  /** Who last wrote it. */
+  writtenBy: "bot" | "customer";
+  /** The Bot wrote it after reading web pages or using its Computer, so it's worth checking. */
+  afterOutsideContent: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** A Bot's Computer. Shut down keeps its disk; Asleep keeps its memory too. */
 export interface Computer {
   state: "running" | "asleep" | "shut_down";
@@ -191,6 +203,12 @@ export const api = {
   updateSkill: (id: string, change: Partial<SkillFields>) =>
     request<{ skill: Skill }>(`/skills/${id}`, { method: "PATCH", json: change }),
   deleteSkill: (id: string) => request<unknown>(`/skills/${id}`, { method: "DELETE" }),
+  notes: (botId: string) => request<{ notes: Note[] }>(`/bots/${botId}/notes`),
+  addNote: (botId: string, content: string) => request<{ note: Note }>(`/bots/${botId}/notes`, { method: "POST", json: { content } }),
+  editNote: (botId: string, id: string, content: string) =>
+    request<{ note: Note }>(`/bots/${botId}/notes/${id}`, { method: "PATCH", json: { content } }),
+  deleteNote: (botId: string, id: string) => request<unknown>(`/bots/${botId}/notes/${id}`, { method: "DELETE" }),
+
   grantSkill: (botId: string, skillId: string) => request<unknown>(`/bots/${botId}/skills/${skillId}`, { method: "PUT" }),
   revokeSkill: (botId: string, skillId: string) => request<unknown>(`/bots/${botId}/skills/${skillId}`, { method: "DELETE" }),
 

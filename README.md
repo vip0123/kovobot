@@ -26,13 +26,13 @@ Kovobot chats on the Channels you already use, works on its own cloud Computer, 
 | | |
 |---|---|
 | Sign in | One-time email link or Sign in with Google; no passwords stored |
-| Bots | Create, rename, delete, switch models; give each its own instructions and Skills (write them, or import SKILL.md files); no limit on how many |
+| Bots | Create, rename, delete, switch models; give each its own instructions and Skills (write them, or import SKILL.md files); each keeps notes across Conversations that you can read and edit; no limit on how many |
 | Chat | Streamed replies on the web Channel that survive a reload; attach images, PDFs and text files; see what the model thinks; "think deeper"; web search with sources (self-hosted) |
 | Model providers | OpenAI, Anthropic (prompt caching, refusal fallbacks), Google Gemini, xAI, OpenRouter, local OpenAI-compatible servers (self-hosted) |
 | Computers | Self-hosted: a Linux desktop per Bot in local Docker. The Bot uses it through a Driver model (OpenAI, Anthropic or Google); you watch live and can take over, and the Bot waits |
 | Waitlist | Early-access landing page with a waitlist and a one-time launch email |
 
-Coming next: Own keys, Credit and metering, Telegram, Discord and Slack, MCP tools, memory, schedules, and cloud Computers. See the [roadmap](#roadmap).
+Coming next: Own keys, Credit and metering, Telegram, Discord and Slack, MCP tools, schedules, and cloud Computers. See the [roadmap](#roadmap).
 
 ## Self-host in five minutes
 
@@ -88,7 +88,8 @@ TypeScript end to end, Postgres as the only database, and tests that run against
 - [ ] Credit, metering and Plans (hosted)
 - [ ] Telegram, Discord and Slack
 - [ ] MCP tools and Connected apps, with Approvals
-- [ ] Memory and schedules
+- [x] Memory: notes each Bot keeps, which you read and edit
+- [ ] Schedules
 - [x] Linux Computers in local Docker, watched live (self-hosted)
 - [x] Bots drive their Computers through a Driver model, and wait while you take over
 - [ ] Cloud Computers: Linux, Windows and macOS
