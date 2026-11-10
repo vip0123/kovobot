@@ -106,6 +106,10 @@ _Avoid_: RDS fee, SAL fee, seat fee
 An AI that a Customer sets up and owns. It chats on Channels, calls models and tools, and drives Computers.
 _Avoid_: agent, assistant
 
+**Bot instructions**:
+What a Customer tells a Bot about how to work for them: who it works for, how it answers, what to always or never do. The Bot gets them with every Task, and they win over our defaults.
+_Avoid_: system prompt, persona, custom instructions
+
 **Bot service**:
 Our main service: the website, the API, the agent loop, Channels, model adapters and MCP. It runs every Customer's Bots.
 _Avoid_: the Bot (meaning the software), backend, core
