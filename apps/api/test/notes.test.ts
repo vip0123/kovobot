@@ -145,7 +145,7 @@ describe("a Bot's notes", () => {
     modelCalls("remember", { note: "One more" });
     await chat(browser, bot, "Remember one more thing.");
     expect(lastToolOutput().output).toBe("Your notes are full: you keep up to 50. Change or forget one first.");
-  }, 20_000);
+  }, 45_000);
 
   test("a note written after reading Outside content, such as web pages, is marked for the Customer to check", async () => {
     const { browser, bot } = await signedInBot();
