@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { type Browser, serverSentEvents, startTestServer, uniqueEmail } from "./harness.ts";
 
 const server = startTestServer();
@@ -355,6 +355,34 @@ describe("keeping a conversation sound", () => {
     release();
     expect((await serverSentEvents(await first)).at(-1)).toMatchObject({ event: "done" });
     expect((await history(browser, bot)).map((message) => message.content)).not.toContain("Second?");
+  });
+
+  test("a reply that runs past five minutes, as one waiting on the Customer at its Computer can, still holds the conversation", async () => {
+    // Only the reply's renewal timer is faked; the clock is the harness's own.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const browser = await signedInBrowser();
+      const bot = await createBot(browser);
+      server.openai.replyWith("First answer.");
+      const release = server.openai.holdNextReply();
+      const before = server.openai.requests.length;
+
+      const first = browser.post(`/api/bots/${bot.id}/messages`, { content: "First?" });
+      await server.openai.waitForRequests(before + 1);
+      for (let minute = 1; minute <= 12; minute++) {
+        server.clock.advanceMinutes(1);
+        await vi.advanceTimersByTimeAsync(60_000);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      const second = await browser.post(`/api/bots/${bot.id}/messages`, { content: "Second?" });
+      expect(second.status).toBe(409);
+
+      release();
+      expect((await serverSentEvents(await first)).at(-1)).toMatchObject({ event: "done" });
+      expect((await history(browser, bot)).map((message) => message.content)).toEqual(["First?", "First answer."]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("a long conversation's window moves on in steps, so the model keeps reading its start from cache", async () => {
