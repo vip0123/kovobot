@@ -16,7 +16,7 @@ import { sessionCustomer } from "./auth/sessions.ts";
 import { computerRoutes, computerSizes, deleteBotComputer } from "./computer-routes.ts";
 import { driveComputer, drivingFor } from "./driver.ts";
 import type { Customer } from "./customers.ts";
-import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
+import { apiError, botNotFound, jsonBody, UUID_PATTERN } from "./http.ts";
 import { type ModelAdapters, ModelError, type ModelProvider, uniquePages, type WebSource } from "./models/adapter.ts";
 import { describeModel, MODELS, type ModelInfo } from "./models/catalog.ts";
 import { botNotes, notebook, noteRoutes } from "./notes.ts";
@@ -321,10 +321,6 @@ function keyRefused(deps: AppDeps, model: ModelInfo) {
     code: "model_key_refused",
     message: `${provider} refused this Kovobot's key, so trying again won't help. Whoever runs it needs to fix ${setting} and restart.`,
   };
-}
-
-function botNotFound(c: Parameters<typeof apiError>[0]) {
-  return apiError(c, 404, "bot_not_found", "There's no such Bot.");
 }
 
 /** The model a Bot is being set to, or why it can't be: unknown, or its Model provider isn't set up here. */

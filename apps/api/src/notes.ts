@@ -1,8 +1,8 @@
 import { type Context, Hono } from "hono";
 import type { Db } from "@kovobot/db";
 import type { AppDeps } from "./app.ts";
-import type { Customer } from "./customers.ts";
-import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
+import { type Customer, ownBotOnly } from "./customers.ts";
+import { apiError, jsonBody } from "./http.ts";
 
 /** Something a Bot keeps in mind across Conversations. The Bot writes it; the Customer can change it. */
 export interface Note {
@@ -27,7 +27,7 @@ export interface Notebook {
   forget(id: number): Promise<{ done: boolean; answer: string }>;
 }
 
-type Env = { Variables: { customer: Customer } };
+type Env = { Variables: { customer: Customer; botId: string } };
 
 /**
  * A Bot's notes, under /bots/:id/notes, for the Customer to see, add, edit and delete.
@@ -35,46 +35,30 @@ type Env = { Variables: { customer: Customer } };
  */
 export function noteRoutes(deps: AppDeps) {
   const routes = new Hono<Env>();
+  routes.use("*", ownBotOnly(deps.db));
 
-  /** The Customer's own Bot's id, or null. */
-  const ownBot = async (c: Context<Env>) => {
-    const botId = c.req.param("id") ?? "";
-    if (!UUID_PATTERN.test(botId)) return null;
-    const { rowCount } = await deps.db.query("SELECT 1 FROM bots WHERE id = $1 AND customer_id = $2", [botId, c.get("customer").id]);
-    return rowCount === 1 ? botId : null;
-  };
-
-  routes.get("/", async (c) => {
-    const botId = await ownBot(c);
-    return botId ? c.json({ notes: await botNotes(deps.db, botId) }) : botNotFound(c);
-  });
+  routes.get("/", async (c) => c.json({ notes: await botNotes(deps.db, c.get("botId")) }));
 
   routes.post("/", async (c) => {
-    const botId = await ownBot(c);
-    if (!botId) return botNotFound(c);
     const content = noteContent((await jsonBody(c)).content);
     if (content === null) return invalidNote(c);
-    const note = await addNote(deps.db, botId, content, { writtenBy: "customer", afterOutsideContent: false }, deps.now());
+    const note = await addNote(deps.db, c.get("botId"), content, { writtenBy: "customer", afterOutsideContent: false }, deps.now());
     if (!note) return apiError(c, 409, "too_many_notes", `A Bot can keep up to ${MAX_NOTES_PER_BOT} notes. Delete one first.`);
     return c.json({ note }, 201);
   });
 
   // The Customer's edit makes the note theirs, checked.
   routes.patch("/:noteId", async (c) => {
-    const botId = await ownBot(c);
-    if (!botId) return botNotFound(c);
     const content = noteContent((await jsonBody(c)).content);
     if (content === null) return invalidNote(c);
     const author = { writtenBy: "customer", afterOutsideContent: false } as const;
-    const note = await rewriteNote(deps.db, botId, noteNumber(c.req.param("noteId")), content, author, deps.now());
+    const note = await rewriteNote(deps.db, c.get("botId"), noteNumber(c.req.param("noteId")), content, author, deps.now());
     return note ? c.json({ note }) : noteNotFound(c);
   });
 
-  routes.delete("/:noteId", async (c) => {
-    const botId = await ownBot(c);
-    if (!botId) return botNotFound(c);
-    return (await deleteNote(deps.db, botId, noteNumber(c.req.param("noteId")))) ? c.body(null, 204) : noteNotFound(c);
-  });
+  routes.delete("/:noteId", async (c) =>
+    (await deleteNote(deps.db, c.get("botId"), noteNumber(c.req.param("noteId")))) ? c.body(null, 204) : noteNotFound(c),
+  );
 
   return routes;
 }
@@ -140,9 +124,14 @@ async function addNote(db: Db, botId: string, content: string, author: Author, n
   return rows[0] ?? null;
 }
 
+/**
+ * Rewrites a note. The Customer's edit is their check, so it clears the mark; the Bot's rewrite
+ * keeps it, and adds it if this Task read Outside content.
+ */
 async function rewriteNote(db: Db, botId: string, id: number, content: string, author: Author, now: Date): Promise<Note | null> {
   const { rows } = await db.query<Note>(
-    `UPDATE notes SET content = $3, written_by = $4, after_outside_content = $5, updated_at = $6
+    `UPDATE notes SET content = $3, written_by = $4,
+       after_outside_content = CASE WHEN $4 = 'customer' THEN false ELSE after_outside_content OR $5 END, updated_at = $6
      WHERE id = $2 AND bot_id = $1 RETURNING ${NOTE_COLUMNS}`,
     [botId, id, content, author.writtenBy, author.afterOutsideContent, now],
   );
@@ -152,10 +141,6 @@ async function rewriteNote(db: Db, botId: string, id: number, content: string, a
 async function deleteNote(db: Db, botId: string, id: number): Promise<boolean> {
   const { rowCount } = await db.query("DELETE FROM notes WHERE id = $2 AND bot_id = $1", [botId, id]);
   return rowCount === 1;
-}
-
-function botNotFound(c: Context) {
-  return apiError(c, 404, "bot_not_found", "There's no such Bot.");
 }
 
 function noteNotFound(c: Context) {

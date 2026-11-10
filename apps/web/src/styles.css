@@ -2037,7 +2037,7 @@ select:disabled {
 }
 
 /* A Bot's memory: its notes */
-.memory-empty {
+.empty-list {
   margin: 0;
   padding: 16px;
   border: 1px dashed var(--border-strong);

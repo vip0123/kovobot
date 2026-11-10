@@ -170,20 +170,26 @@ async function* runTool(call: ToolCall, task: { botName: string; tools?: TaskToo
 
 /** Adds, changes or forgets one of the Bot's notes, as the model asked. */
 async function* writeNote(call: ToolCall, botName: string, book: Notebook, state: TaskState): AsyncGenerator<TaskEvent, string> {
+  const action = NOTE_ACTIONS[call.name]!;
   const content = typeof call.input.note === "string" ? call.input.note : "";
   const id = Number(call.input.id);
   if (call.name !== "remember" && !(Number.isSafeInteger(id) && id > 0)) return "Say which note, by its number.";
-  const { done, answer } =
-    call.name === "remember"
-      ? await book.remember(content, state.readOutsideContent)
-      : call.name === "change_note"
-        ? await book.change(id, content, state.readOutsideContent)
-        : await book.forget(id);
-  if (done) {
-    const what = call.name === "remember" ? "made a note" : call.name === "change_note" ? "changed a note" : "forgot a note";
-    yield { type: "status", text: `${botName} ${what}.` };
-  }
+  const { done, answer } = await action.run(book, { id, content, afterOutsideContent: state.readOutsideContent });
+  if (done) yield { type: "status", text: `${botName} ${action.said}.` };
   return answer;
+}
+
+/** What each note tool does, and what the Customer is told it did. */
+const NOTE_ACTIONS: Record<string, { said: string; run: (book: Notebook, given: NoteGiven) => ReturnType<Notebook["forget"]> }> = {
+  remember: { said: "made a note", run: (book, { content, afterOutsideContent }) => book.remember(content, afterOutsideContent) },
+  change_note: { said: "changed a note", run: (book, { id, content, afterOutsideContent }) => book.change(id, content, afterOutsideContent) },
+  forget_note: { said: "forgot a note", run: (book, { id }) => book.forget(id) },
+};
+
+interface NoteGiven {
+  id: number;
+  content: string;
+  afterOutsideContent: boolean;
 }
 
 /** One of the Bot's Skills in full, by the name it asked for. */
