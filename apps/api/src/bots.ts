@@ -119,7 +119,7 @@ export function botRoutes(deps: AppDeps) {
     const body = await jsonBody(c);
     const name = body.name === undefined ? undefined : botName(body.name);
     if (name === null) return invalidName(c);
-    const instructions = body.instructions === undefined ? undefined : botInstructions(body.instructions);
+    const instructions = body.instructions === undefined ? undefined : readInstructions(body.instructions);
     if (instructions === null) {
       const limit = MAX_INSTRUCTIONS_LENGTH.toLocaleString("en-US");
       return apiError(c, 400, "invalid_instructions", `Write instructions of up to ${limit} characters.`);
@@ -346,7 +346,7 @@ function botName(value: unknown): string | null {
 }
 
 /** A Bot's instructions as given, trimmed; empty clears them. Null if they aren't text that fits. */
-function botInstructions(value: unknown): string | null {
+function readInstructions(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const instructions = value.trim();
   return instructions.length <= MAX_INSTRUCTIONS_LENGTH ? instructions : null;
