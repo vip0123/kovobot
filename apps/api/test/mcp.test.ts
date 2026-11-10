@@ -64,6 +64,7 @@ describe("MCP servers", () => {
         state: "connected",
         tools: [
           { name: "cancel_order", description: "Cancels an order and refunds it.", readOnly: false },
+          { name: "lookup.order", description: "Looks up an order the old way.", readOnly: true },
           { name: "lookup_order", description: "Looks up one order by its number.", readOnly: true },
         ],
       },
@@ -75,6 +76,8 @@ describe("MCP servers", () => {
     const asked = server.openai.requests.at(-2)!;
     const offered = (asked.tools ?? []).map((tool) => (tool as { name?: string }).name);
     expect(offered).toContain("bakery_orders__lookup_order");
+    // Two tools whose names come out the same for the model each get a name of their own.
+    expect(offered).toContain("bakery_orders__lookup_order_2");
     // Anything that changes things waits for Approvals, which aren't here yet.
     expect(offered).not.toContain("bakery_orders__cancel_order");
     expect(mcp.calls.at(-1)).toMatchObject({ name: "lookup_order", args: { order: 42 } });
@@ -103,16 +106,22 @@ describe("MCP servers", () => {
     expect(connected.status).toBe(201);
     const pending = ((await connected.json()) as { server: McpServer }).server;
     expect(pending).toMatchObject({ state: "needs_sign_in", tools: [] });
+    // Connecting it again, as after a sign-in that didn't finish, starts signing in again.
+    const again = await connect(browser, bot);
+    expect(again.status).toBe(201);
+    const restarted = ((await again.json()) as { server: McpServer }).server;
+    expect(restarted).toMatchObject({ id: pending.id, state: "needs_sign_in", signInUrl: expect.stringContaining("/authorize?") });
     expect(pending.signInUrl).toMatch(new RegExp(`^${mcp.baseUrl}/authorize\\?`));
 
     // The Customer's browser goes to the server's sign-in page, which sends it back to Kovobot.
-    const signIn = await fetch(pending.signInUrl!, { redirect: "manual" });
+    // The newer sign-in is the one that counts.
+    const signIn = await fetch(restarted.signInUrl!, { redirect: "manual" });
     const back = new URL(signIn.headers.get("location")!);
     expect(back.pathname).toBe("/api/mcp/oauth/callback");
     const landed = await browser.get(back.pathname + back.search);
     expect(landed.status).toBe(302);
     expect(landed.headers.get("location")).toBe(`${server.config.appUrl}/bots/${bot.id}?mcp=connected`);
-    expect(await serversOf(browser, bot)).toMatchObject([{ state: "connected", name: "Bakery orders", tools: [{}, { name: "lookup_order" }] }]);
+    expect(await serversOf(browser, bot)).toMatchObject([{ state: "connected", name: "Bakery orders", tools: [{}, {}, { name: "lookup_order" }] }]);
 
     modelCalls("bakery_orders__lookup_order", { order: 9 });
     await chat(browser, bot, "Look up order 9.");
@@ -178,7 +187,17 @@ describe("MCP servers, hosted", () => {
 
   test("only a public https address is connected: hosted, Kovobot never calls into a private network", async () => {
     const { browser, bot } = await signedInBot(hosted);
-    for (const url of [mcp.url, "https://127.0.0.1/mcp", "https://10.0.0.8/mcp", "https://localhost/mcp"]) {
+    for (const url of [
+      mcp.url,
+      "https://127.0.0.1/mcp",
+      "https://10.0.0.8/mcp",
+      "https://localhost/mcp",
+      // The same private addresses written as IPv6: mapped, mapped in hex, NAT64, link-local.
+      "https://[::ffff:10.0.0.8]/mcp",
+      "https://[::ffff:a9fe:a9fe]/mcp",
+      "https://[64:ff9b::a00:1]/mcp",
+      "https://[fe80::1]/mcp",
+    ]) {
       const refused = await browser.post(`/api/bots/${bot.id}/mcp-servers`, { url });
       expect(refused.status).toBe(400);
       expect(await refused.json()).toEqual({

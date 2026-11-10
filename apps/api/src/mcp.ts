@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import { type Context, Hono } from "hono";
+import { isPublicAddress, publicOnlyFetch } from "./addresses.ts";
+import { Hono } from "hono";
 import {
   type CallToolResult,
   Client,
@@ -14,7 +15,7 @@ import {
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
 import type { AppDeps } from "./app.ts";
-import type { Customer } from "./customers.ts";
+import { type Customer, ownBotOnly } from "./customers.ts";
 import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
 import type { FunctionTool } from "./models/adapter.ts";
 
@@ -65,11 +66,19 @@ export interface ConnectedTool {
   call: (input: Record<string, unknown>) => Promise<string>;
 }
 
+/** The way to a server; hosted, every request and redirect goes only to public addresses. */
+function transportTo(deps: AppDeps, server: StoredServer, auth: StoredOAuth): StreamableHTTPClientTransport {
+  return new StreamableHTTPClientTransport(new URL(server.url), {
+    authProvider: auth,
+    ...(deps.config.mode === "hosted" ? { fetch: publicOnlyFetch } : {}),
+  });
+}
+
 /** The most of a tool's result the model sees. */
 const MAX_TOOL_OUTPUT = 20_000;
 const CLIENT_INFO = { name: "Kovobot", version: "1.0.0" };
 
-type Env = { Variables: { customer: Customer } };
+type Env = { Variables: { customer: Customer; botId: string } };
 
 /**
  * A Bot's MCP servers, under /bots/:id/mcp-servers, and the end of a server's sign-in at
@@ -78,24 +87,19 @@ type Env = { Variables: { customer: Customer } };
 export function mcpRoutes(deps: AppDeps) {
   const routes = new Hono<Env>();
 
-  const ownBot = async (c: Context<Env>) => {
-    const botId = c.req.param("id") ?? "";
-    if (!UUID_PATTERN.test(botId)) return null;
-    const { rowCount } = await deps.db.query("SELECT 1 FROM bots WHERE id = $1 AND customer_id = $2", [botId, c.get("customer").id]);
-    return rowCount === 1 ? botId : null;
-  };
+  routes.use("/bots/:id/mcp-servers", ownBotOnly(deps.db));
+  routes.use("/bots/:id/mcp-servers/*", ownBotOnly(deps.db));
 
   routes.get("/bots/:id/mcp-servers", async (c) => {
-    const botId = await ownBot(c);
-    if (!botId) return botNotFound(c);
+    const botId = c.get("botId");
     const { rows } = await deps.db.query<StoredServer>(`SELECT ${SERVER_COLUMNS} FROM mcp_servers WHERE bot_id = $1 ORDER BY created_at, id`, [botId]);
     return c.json({ servers: rows.map((server) => view(server)) });
   });
 
   // Connects a server: at once if it lets Kovobot in, else it answers with where the Customer signs in.
+  // Connecting one again that still wants signing in starts its sign-in again.
   routes.post("/bots/:id/mcp-servers", async (c) => {
-    const botId = await ownBot(c);
-    if (!botId) return botNotFound(c);
+    const botId = c.get("botId");
     const url = await serverAddress(deps, (await jsonBody(c)).url);
     if ("error" in url) return apiError(c, 400, "invalid_mcp_url", url.error);
     const now = deps.now();
@@ -104,7 +108,18 @@ export function mcpRoutes(deps: AppDeps) {
        ON CONFLICT (bot_id, url) DO NOTHING RETURNING ${SERVER_COLUMNS}`,
       [botId, url.href, now],
     );
-    if (!rows[0]) return apiError(c, 409, "mcp_already_connected", "That MCP server is already connected to this Bot.");
+    if (!rows[0]) {
+      const { rows: existing } = await deps.db.query<StoredServer>(
+        `SELECT ${SERVER_COLUMNS} FROM mcp_servers WHERE bot_id = $1 AND url = $2`,
+        [botId, url.href],
+      );
+      if (existing[0]?.state !== "needs_sign_in") {
+        return apiError(c, 409, "mcp_already_connected", "That MCP server is already connected to this Bot.");
+      }
+      const again = await reach(deps, existing[0]);
+      if ("error" in again) return apiError(c, 400, "mcp_unreachable", `Kovobot couldn't connect to an MCP server at that address: ${again.error}`);
+      return c.json({ server: again.server }, 201);
+    }
     const attempt = await reach(deps, rows[0]);
     if ("error" in attempt) {
       await deps.db.query("DELETE FROM mcp_servers WHERE id = $1", [rows[0].id]);
@@ -114,9 +129,9 @@ export function mcpRoutes(deps: AppDeps) {
   });
 
   routes.delete("/bots/:id/mcp-servers/:serverId", async (c) => {
-    const botId = await ownBot(c);
+    const botId = c.get("botId");
     const serverId = c.req.param("serverId");
-    if (!botId || !UUID_PATTERN.test(serverId)) return apiError(c, 404, "mcp_server_not_found", "There's no such MCP server.");
+    if (!UUID_PATTERN.test(serverId)) return apiError(c, 404, "mcp_server_not_found", "There's no such MCP server.");
     const { rowCount } = await deps.db.query("DELETE FROM mcp_servers WHERE id = $1 AND bot_id = $2", [serverId, botId]);
     return rowCount === 1 ? c.body(null, 204) : apiError(c, 404, "mcp_server_not_found", "There's no such MCP server.");
   });
@@ -134,7 +149,7 @@ export function mcpRoutes(deps: AppDeps) {
     const back = (outcome: string) => c.redirect(`${deps.config.appUrl}/bots/${server.botId}?mcp=${outcome}`, 302);
     try {
       const auth = new StoredOAuth(deps, server);
-      const transport = new StreamableHTTPClientTransport(new URL(server.url), { authProvider: auth });
+      const transport = transportTo(deps, server, auth);
       await transport.finishAuth(new URL(c.req.url).searchParams);
       const attempt = await reach(deps, { ...server, auth: auth.stored });
       return back("error" in attempt || attempt.server.state !== "connected" ? "failed" : "connected");
@@ -160,8 +175,13 @@ export async function mcpTools(deps: AppDeps, botId: string, botName: string): P
     let prefix = slug(label);
     for (let n = 2; taken.has(prefix); n += 1) prefix = `${slug(label)}_${n}`;
     taken.add(prefix);
-    for (const tool of server.tools.filter((each) => each.readOnly)) {
-      const name = `${prefix}__${tool.name.replace(/[^A-Za-z0-9_-]/g, "_")}`.slice(0, 64);
+    const readOnly = server.tools.filter((each) => each.readOnly);
+    const unchanged = (tool: McpTool) => /^[A-Za-z0-9_-]+$/.test(tool.name);
+    for (const tool of [...readOnly.filter(unchanged), ...readOnly.filter((tool) => !unchanged(tool))]) {
+      const base = `${prefix}__${tool.name.replace(/[^A-Za-z0-9_-]/g, "_")}`.slice(0, 60);
+      let name = base;
+      for (let n = 2; taken.has(name); n += 1) name = `${base}_${n}`;
+      taken.add(name);
       tools.push({
         tool: { name, description: `${tool.description} (A tool of ${label}, an MCP server.)`.trim(), parameters: tool.inputSchema },
         status: `${botName} is using ${label}: ${tool.name}.`,
@@ -177,7 +197,7 @@ async function callTool(deps: AppDeps, server: StoredServer, name: string, input
   const auth = new StoredOAuth(deps, server);
   const client = new Client(CLIENT_INFO);
   try {
-    await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { authProvider: auth }));
+    await client.connect(transportTo(deps, server, auth));
     return toolOutput((await client.callTool({ name, arguments: input })) as CallToolResult);
   } catch (error) {
     if (error instanceof UnauthorizedError) {
@@ -209,7 +229,7 @@ async function reach(deps: AppDeps, server: StoredServer): Promise<{ server: Mcp
   const auth = new StoredOAuth(deps, server);
   const client = new Client(CLIENT_INFO);
   try {
-    await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { authProvider: auth }));
+    await client.connect(transportTo(deps, server, auth));
     const tools: McpTool[] = [];
     let cursor: string | undefined;
     do {
@@ -224,7 +244,7 @@ async function reach(deps: AppDeps, server: StoredServer): Promise<{ server: Mcp
       }
       cursor = page.nextCursor;
     } while (cursor && tools.length < 200);
-    tools.sort((a, b) => a.name.localeCompare(b.name));
+    tools.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     const name = client.getServerVersion()?.name ?? null;
     const saved = { ...server, state: "connected" as const, name, tools, auth: auth.stored };
     await deps.db.query("UPDATE mcp_servers SET state = 'connected', name = $2, tools = $3, auth = $4, updated_at = $5 WHERE id = $1", [
@@ -362,25 +382,6 @@ async function serverAddress(deps: AppDeps, value: unknown): Promise<URL | { err
   return url;
 }
 
-/** Whether an IP address is on the public internet: not loopback, private, link-local, shared or reserved. */
-export function isPublicAddress(address: string): boolean {
-  const mapped = address.toLowerCase().replace(/^::ffff:/, "");
-  if (isIP(mapped) === 4) {
-    const [a, b] = mapped.split(".").map(Number) as [number, number];
-    return !(
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      a >= 224
-    );
-  }
-  return !(mapped === "::" || mapped === "::1" || /^f[cd]/.test(mapped) || /^fe[89ab]/.test(mapped));
-}
-
 function slug(text: string): string {
   return (
     text
@@ -404,6 +405,3 @@ function view(server: Pick<StoredServer, "id" | "url" | "name" | "state" | "tool
 const SERVER_COLUMNS = `mcp_servers.id, mcp_servers.bot_id AS "botId", mcp_servers.url, mcp_servers.name, mcp_servers.state,
   mcp_servers.auth, mcp_servers.tools`;
 
-function botNotFound(c: Context) {
-  return apiError(c, 404, "bot_not_found", "There's no such Bot.");
-}

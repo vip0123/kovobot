@@ -55,6 +55,19 @@ export class FakeMcpServer {
           return { content: [{ type: "text", text: "Cancelled." }] };
         },
       );
+      // A name that only differs from lookup_order in a character model tool names can't have.
+      server.registerTool(
+        "lookup.order",
+        {
+          description: "Looks up an order the old way.",
+          inputSchema: fromJsonSchema({ type: "object", properties: { order: { type: "integer" } }, required: ["order"] }),
+          annotations: { readOnlyHint: true },
+        },
+        async (args) => {
+          this.calls.push({ name: "lookup.order", args, authorization: this.authorization });
+          return { content: [{ type: "text", text: "Found it the old way." }] };
+        },
+      );
       return server;
     });
 

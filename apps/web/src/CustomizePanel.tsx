@@ -690,6 +690,18 @@ function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
     }
   }
 
+  /** Starts a server's sign-in again, as when one didn't finish or its sign-in has lapsed. */
+  async function signIn(server: McpServer) {
+    setError(null);
+    try {
+      const { server: restarted } = await api.connectMcpServer(bot.id, server.url);
+      if (restarted.signInUrl) window.location.assign(restarted.signInUrl);
+      else setServers((current) => current?.map((each) => (each.id === restarted.id ? restarted : each)) ?? null);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
   async function remove(server: McpServer) {
     setError(null);
     try {
@@ -734,6 +746,11 @@ function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
               )}
               <div className="note-foot">
                 <span />
+                {server.state === "needs_sign_in" && (
+                  <button type="button" className="button ghost small" onClick={() => void signIn(server)}>
+                    Sign in
+                  </button>
+                )}
                 <button type="button" className="button ghost small danger-text" onClick={() => void remove(server)}>
                   Remove
                 </button>
