@@ -4,6 +4,9 @@ import type { AddressInfo } from "node:net";
 
 export const FAKE_OPENAI_KEY = "test-openai-key";
 
+/** A 1x1 PNG, base64: the picture the fake image models make. */
+export const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
 /** What the API sent to the Responses API, as the fake received it. */
 export interface ResponsesRequest {
   model: string;
@@ -100,13 +103,30 @@ export class FakeOpenAI {
     await new Promise((resolve) => this.server?.close(resolve));
   }
 
+  /** Every request to the Image API, as the fake received it. */
+  readonly imageRequests: Array<Record<string, unknown>> = [];
+  /** What the Image API answers next: a picture, or a refusal under OpenAI's usage policy. */
+  nextImage: "picture" | "refuse" = "picture";
+
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    if (request.method !== "POST" || request.url !== "/v1/responses") {
+    if (request.method !== "POST" || (request.url !== "/v1/responses" && request.url !== "/v1/images/generations")) {
       response.writeHead(404).end();
       return;
     }
     if (request.headers.authorization !== `Bearer ${FAKE_OPENAI_KEY}`) {
       sendJson(response, 401, { error: { message: "Incorrect API key provided.", type: "invalid_request_error" } });
+      return;
+    }
+    if (request.url === "/v1/images/generations") {
+      this.imageRequests.push(JSON.parse(await readBody(request)) as Record<string, unknown>);
+      if (this.nextImage === "refuse") {
+        this.nextImage = "picture";
+        sendJson(response, 400, {
+          error: { message: "Your request was rejected by the safety system.", type: "image_generation_user_error", code: "moderation_blocked" },
+        });
+        return;
+      }
+      sendJson(response, 200, { created: 1, data: [{ b64_json: TINY_PNG }], usage: { input_tokens: 10, output_tokens: 100, total_tokens: 110 } });
       return;
     }
     const body = JSON.parse(await readBody(request)) as ResponsesRequest;

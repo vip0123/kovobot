@@ -10,6 +10,7 @@ import type { ComputerService } from "./computers.ts";
 import { apiError, sameOriginWrites } from "./http.ts";
 import { leadRoutes } from "./leads.ts";
 import type { Mailer } from "./mailer.ts";
+import type { ImageMaker } from "./media/images.ts";
 import type { ModelAdapters } from "./models/adapter.ts";
 import { sweepRoutes } from "./sweeps.ts";
 
@@ -26,6 +27,8 @@ export interface AppDeps {
   computers: ComputerService | null;
   /** Composio, for Connected apps; null leaves them off. */
   composio: Composio | null;
+  /** The image model Bots make pictures with; null where no Model provider with one is set up. */
+  images: ImageMaker | null;
   now: () => Date;
 }
 

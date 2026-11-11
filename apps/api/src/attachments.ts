@@ -22,11 +22,13 @@ const MODEL_FILE_BUDGET = 12 * MB;
 
 export type AttachmentType = FileForModel["mediaType"] | "text/plain";
 
-/** A file as it arrives, checked. */
+/** A file as it arrives, checked: the Customer's, or one the Bot made. */
 export interface IncomingFile {
   name: string;
   mediaType: AttachmentType;
   bytes: Buffer;
+  /** For a picture the Bot made: the description it made it from. */
+  prompt?: string;
 }
 
 /** A file as the Conversation lists it. */
@@ -35,6 +37,8 @@ export interface AttachmentInfo {
   name: string;
   mediaType: AttachmentType;
   size: number;
+  /** Only on a picture the Bot made: the description it made it from. */
+  prompt?: string;
 }
 
 /** The files sent with a message, checked, or why they can't be taken. */
@@ -73,18 +77,24 @@ export async function saveAttachments(
   const saved: AttachmentInfo[] = [];
   for (const [position, file] of files.entries()) {
     const { rows } = await db.query<{ id: string }>(
-      `INSERT INTO attachments (message_id, position, name, media_type, size, data, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [messageId, position, file.name, file.mediaType, file.bytes.length, file.bytes, now],
+      `INSERT INTO attachments (message_id, position, name, media_type, size, data, prompt, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      [messageId, position, file.name, file.mediaType, file.bytes.length, file.bytes, file.prompt ?? null, now],
     );
-    saved.push({ id: rows[0]!.id, name: file.name, mediaType: file.mediaType, size: file.bytes.length });
+    saved.push({
+      id: rows[0]!.id,
+      name: file.name,
+      mediaType: file.mediaType,
+      size: file.bytes.length,
+      ...(file.prompt === undefined ? {} : { prompt: file.prompt }),
+    });
   }
   return saved;
 }
 
 /** A message's files as a column of its row: `attachments`, a JSON list of AttachmentInfo. */
 export const ATTACHMENTS_COLUMN = `COALESCE((
-    SELECT json_agg(json_build_object('id', a.id, 'name', a.name, 'mediaType', a.media_type, 'size', a.size) ORDER BY a.position)
+    SELECT json_agg(json_strip_nulls(json_build_object('id', a.id, 'name', a.name, 'mediaType', a.media_type, 'size', a.size, 'prompt', a.prompt)) ORDER BY a.position)
     FROM attachments a WHERE a.message_id = messages.id
   ), '[]'::json) AS attachments`;
 
@@ -99,7 +109,7 @@ export async function conversationForModel(
   { pdfs }: { pdfs: boolean },
 ): Promise<ChatMessage[]> {
   const ids = messages.flatMap((message) => (message.role === "user" ? message.attachments.map((file) => file.id) : []));
-  if (ids.length === 0) return messages.map(({ role, content }) => ({ role, content }));
+  if (ids.length === 0) return messages.map(({ role, content, attachments }) => ({ role, content: withPictures(role, content, attachments) }));
 
   // Newest first (the latest message's last Attachment first), stopping at the first that doesn't fit.
   const newestFirst = messages.flatMap((message) => (message.role === "user" ? message.attachments : [])).reverse();
@@ -117,7 +127,7 @@ export async function conversationForModel(
   const data = new Map(rows.map((row) => [row.id, row.data]));
 
   return messages.map(({ role, content, attachments }) => {
-    if (role !== "user" || attachments.length === 0) return { role, content };
+    if (role !== "user" || attachments.length === 0) return { role, content: withPictures(role, content, attachments) };
     const texts: string[] = [];
     const files: FileForModel[] = [];
     for (const file of attachments) {
@@ -129,6 +139,21 @@ export async function conversationForModel(
     }
     return { role, content: [content, ...texts].filter(Boolean).join("\n\n"), ...(files.length > 0 ? { attachments: files } : {}) };
   });
+}
+
+/**
+ * A reply as the model sees it later: what it wrote, and the pictures it made, by the descriptions
+ * it made them from. The pictures themselves aren't sent back; the model knows them by their words.
+ */
+function withPictures(role: "user" | "assistant", content: string, attachments: AttachmentInfo[]): string {
+  const prompts = role === "assistant" ? attachments.flatMap((file) => (file.prompt === undefined ? [] : [file.prompt])) : [];
+  if (prompts.length === 0) return content;
+  const made = prompts.length === 1 ? "a picture" : `${prompts.length} pictures`;
+  const shown = prompts.length === 1 ? "it" : "them";
+  return (
+    `${content}\n\n[Kovobot's record of this reply: you made ${made} with generate_image, and the Customer saw ${shown} ` +
+    `with this reply. Made from: ${prompts.map((prompt) => JSON.stringify(prompt)).join("; ")}.]`
+  );
 }
 
 /** One of the Customer's Bot's files, or null when it isn't theirs or doesn't exist. */

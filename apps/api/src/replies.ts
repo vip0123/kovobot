@@ -1,5 +1,5 @@
 import { publicOnlyFetch } from "./addresses.ts";
-import { runTask, type TaskTools } from "./agent.ts";
+import { runTask, type TaskImage, type TaskTools } from "./agent.ts";
 import type { AppDeps } from "./app.ts";
 import { actionNotes, approvalDesk, attachApprovals } from "./approvals.ts";
 import { conversationForModel, type IncomingFile, saveAttachments } from "./attachments.ts";
@@ -39,7 +39,7 @@ export interface Reply {
 }
 
 /** What a reply reports as it runs. */
-export type ReplyEvent = "status" | "thinking" | "sources" | "approval" | "delta" | "done" | "error";
+export type ReplyEvent = "status" | "thinking" | "sources" | "approval" | "image" | "delta" | "done" | "error";
 
 /** Where a reply's events go: the web page's stream, or nowhere when nobody is watching. */
 export type ReplyEvents = (event: ReplyEvent, data: unknown) => Promise<void>;
@@ -56,6 +56,15 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
   let thinking = "";
   // A Task may search in more than one model call: every page once.
   const cited: { sources: WebSource[]; searchSuggestions?: string } = { sources: [] };
+  // The pictures the Bot made, kept with its reply.
+  const pictures: IncomingFile[] = [];
+  /** Saves the reply as written so far, with its files and the actions its Task asked to take. */
+  const saveReply = async (files: IncomingFile[]) => {
+    const added = await addMessage(deps.db, conversationId, "assistant", text, deps.now(), { thinking, cited });
+    const message = files.length > 0 ? { ...added, attachments: await saveAttachments(deps.db, added.id, files, deps.now()) } : added;
+    await attachApprovals(deps.db, conversationId, message.id, startedAt);
+    return message;
+  };
   const renewing = setInterval(
     () => void renewReplying(deps.db, conversationId, deps.now()).catch((error: unknown) => console.error(error)),
     RENEW_REPLY_CLAIM_MS,
@@ -104,9 +113,16 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
     };
     // A Task may make several model calls; each one's thinking starts a new paragraph.
     let callEnded = false;
+    let wordsEnded = false;
     for await (const event of runTask(reply.adapter, task)) {
       if (event.type === "status") await emit("status", { text: event.text });
       if (event.type === "approval") await emit("approval", { approval: event.approval });
+      if (event.type === "image") {
+        // Shown as soon as it's made; kept with the reply once the reply is saved.
+        const picture = pictureFile(event.image);
+        pictures.push(picture);
+        await emit("image", { image: { name: picture.name, mediaType: picture.mediaType, prompt: picture.prompt, data: picture.bytes.toString("base64") } });
+      }
       if (event.type === "done") callEnded = true;
       if (event.type === "thinking") {
         const piece = thinking && callEnded ? `\n\n${event.text}` : event.text;
@@ -119,26 +135,26 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
         cited.searchSuggestions = event.searchSuggestions ?? cited.searchSuggestions;
         await emit("sources", { sources: event.sources, ...(event.searchSuggestions ? { searchSuggestions: event.searchSuggestions } : {}) });
       }
+      // Words from a new model call start a new paragraph, so what the Bot said before using a tool
+      // doesn't run into what it says after; a paused answer carries on where it stopped.
+      if (event.type === "done") wordsEnded = event.paused !== true;
       if (event.type !== "text") continue;
-      text += event.text;
-      await emit("delta", { text: event.text });
+      const piece = text && wordsEnded ? `\n\n${event.text}` : event.text;
+      wordsEnded = false;
+      text += piece;
+      await emit("delta", { text: piece });
     }
+    // A reply of pictures alone still says something: Model providers refuse empty turns.
+    if (!text.trim() && pictures.length > 0) text = pictures.length === 1 ? "Here's the picture." : "Here are the pictures.";
     // An empty reply would break the conversation for Model providers that refuse empty turns.
     if (!text.trim()) throw new Error("The model's reply was empty.");
-    const added = await addMessage(deps.db, conversationId, "assistant", text, deps.now(), { thinking, cited });
     // A research report is also kept as a file, with the pages it drew on, to download and share.
-    const message = reply.research
-      ? { ...added, attachments: await saveAttachments(deps.db, added.id, [reportFile(text, cited.sources)], deps.now()) }
-      : added;
-    await attachApprovals(deps.db, conversationId, message.id, startedAt);
+    const message = await saveReply([...(reply.research ? [reportFile(text, cited.sources)] : []), ...pictures]);
     await emit("done", { message });
   } catch (error) {
     console.error(`Bot ${bot.id}: the model call failed`, error);
     // Keep what the Customer already saw, so a reload shows the same conversation.
-    if (text) {
-      const message = await addMessage(deps.db, conversationId, "assistant", text, deps.now(), { thinking, cited });
-      await attachApprovals(deps.db, conversationId, message.id, startedAt);
-    }
+    if (text || pictures.length > 0) await saveReply(pictures);
     await emit(
       "error",
       error instanceof ModelError && error.keyRefused
@@ -164,7 +180,16 @@ async function everyTool(deps: AppDeps, reply: Reply, skillTools: Pick<TaskTools
     connected: [...(await mcpTools(deps, bot.id, bot.name)), ...apps.connected],
     ...(apps.appCatalog ? { appCatalog: apps.appCatalog } : {}),
     approvals: approvalDesk(deps, bot.id, conversationId),
+    // Hosted, a picture has no price yet, so it would be an unpriced call (ADR 0009).
+    ...(deps.images && deps.config.mode !== "hosted" ? { images: deps.images } : {}),
   };
+}
+
+/** A picture the Bot made, as a file of its reply: named after the first words of its description. */
+function pictureFile(image: TaskImage): IncomingFile & { prompt: string } {
+  const words = image.prompt.replace(/[\\/:*?"<>|#\r\n]+/g, " ").split(/\s+/).filter(Boolean).slice(0, 6).join(" ");
+  const extension = image.mediaType.slice("image/".length);
+  return { name: `${words || "Picture"}.${extension}`, mediaType: image.mediaType, bytes: image.bytes, prompt: image.prompt };
 }
 
 /** A research report as a Markdown file: named after its title, with the pages it drew on at the end. */

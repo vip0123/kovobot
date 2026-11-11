@@ -4,6 +4,7 @@ import type { ConnectedTool, PreparedAction } from "./actions.ts";
 import type { ChatMessage, ConversationItem, FunctionTool, ModelAdapter, ThinkingEffort, ToolCall } from "./models/adapter.ts";
 import type { Note, Notebook } from "./notes.ts";
 import { addressesIn, type Page, pageForModel, sameAddress } from "./pages.ts";
+import { IMAGE_SHAPES, ImageError, type ImageMaker, type MadeImage } from "./media/images.ts";
 import type { ScheduleBook } from "./schedules.ts";
 import type { SkillSummary } from "./skills.ts";
 
@@ -16,6 +17,25 @@ const MAX_TASK_STEPS = 10;
  * what one research Task can cost.
  */
 export const RESEARCH_BUDGET = { steps: 24, minutes: 20 };
+
+/** The most pictures one Task makes: each costs about as much as a long reply. */
+export const MAX_IMAGES_PER_TASK = 4;
+
+/** How a Bot makes a picture, with its image model rather than its chat model. */
+const GENERATE_IMAGE: FunctionTool = {
+  name: "generate_image",
+  description:
+    "Makes a picture from a description; the Customer sees it with your reply. Describe it in full: the subject, " +
+    "setting, style, colours, and any words in it. One picture a call.",
+  parameters: {
+    type: "object",
+    properties: {
+      prompt: { type: "string", description: "What the picture shows, in full." },
+      shape: { type: "string", enum: [...IMAGE_SHAPES] },
+    },
+    required: ["prompt"],
+  },
+};
 
 /** How a researching model reads a page its searches found, in full. */
 const READ_PAGE: FunctionTool = {
@@ -116,10 +136,17 @@ export interface TaskTools {
   approvals?: ApprovalDesk;
   /** Present in a deep research Task: reads one web page in full, or says why it couldn't. */
   readPage?: (url: string) => Promise<Page | string>;
+  /** Present when the Bot can make pictures: its image model. */
+  images?: ImageMaker;
 }
 
-/** What a Task reports: the model's events, statuses, and each action it asked the Customer to approve. */
-export type AgentEvent = TaskEvent | { type: "approval"; approval: Approval };
+/** A picture the Bot made in this Task, with the description it made it from. */
+export interface TaskImage extends MadeImage {
+  prompt: string;
+}
+
+/** What a Task reports: the model's events, statuses, each action it asked the Customer to approve, and each picture it made. */
+export type AgentEvent = TaskEvent | { type: "approval"; approval: Approval } | { type: "image"; image: TaskImage };
 
 /** What a Task has read so far: once it reads Outside content, what it writes down is marked for the Customer to check. */
 interface TaskState {
@@ -130,6 +157,8 @@ interface TaskState {
    * up, so a page can't have it carry the Conversation off in an address of its own making.
    */
   readable: Set<string>;
+  /** Pictures asked for so far, made or not: each attempt costs. */
+  imagesAsked: number;
 }
 
 /** What a researching model is told once its budget is spent. */
@@ -171,6 +200,7 @@ export async function* runTask(
     : [
         ...(task.tools?.useComputer ? [USE_COMPUTER] : []),
         ...readSkill,
+        ...(task.tools?.images ? [GENERATE_IMAGE] : []),
         ...(task.tools?.notes ? [NOTE_TOOL] : []),
         ...(task.tools?.schedules ? [SCHEDULE_TOOL] : []),
         ...(task.tools?.appCatalog ? [task.tools.appCatalog.tool] : []),
@@ -191,6 +221,7 @@ export async function* runTask(
   const state: TaskState = {
     readOutsideContent: task.webSearch === true || task.outsideContentRead === true,
     readable: new Set(task.conversation.flatMap((message) => (message.role === "user" ? addressesIn(message.content) : [])).flatMap(spelled)),
+    imagesAsked: 0,
   };
   const conversation: ConversationItem[] = [...task.conversation];
   const deadline = research ? research.now().getTime() + RESEARCH_BUDGET.minutes * 60_000 : Infinity;
@@ -297,6 +328,7 @@ async function* runTool(call: ToolCall, task: { botName: string; tools?: TaskToo
   }
   if (call.name === "read_skill" && skills) return yield* readSkill(call, task.botName, skills);
   if (call.name === READ_PAGE.name && task.tools?.readPage) return yield* readWebPage(call, task.botName, task.tools.readPage, state);
+  if (call.name === GENERATE_IMAGE.name && task.tools?.images) return yield* makeImage(call, task.botName, task.tools.images, state);
   if (notes && call.name === NOTE_TOOL.name) return yield* writeNote(call, task.botName, notes.book, state);
   if (schedules && call.name === SCHEDULE_TOOL.name) return yield* useSchedules(call, task.botName, schedules, state);
   const catalog = task.tools?.appCatalog;
@@ -419,6 +451,23 @@ async function* readWebPage(
   for (const address of [page.url, ...page.links.map((link) => link.url)]) for (const same of spelled(address)) state.readable.add(same);
   yield { type: "sources", sources: [{ url: page.url, title: page.title }] };
   return pageForModel(page);
+}
+
+/** A picture, made with the Bot's image model and shown with its reply; up to MAX_IMAGES_PER_TASK a Task. */
+async function* makeImage(call: ToolCall, botName: string, images: ImageMaker, state: TaskState): AsyncGenerator<AgentEvent, string> {
+  const prompt = typeof call.input.prompt === "string" ? call.input.prompt.trim().slice(0, 4_000) : "";
+  if (!prompt) return "Describe the picture to make.";
+  if (state.imagesAsked >= MAX_IMAGES_PER_TASK) return `You've made ${MAX_IMAGES_PER_TASK} pictures for this message, the most one can have.`;
+  const shape = IMAGE_SHAPES.find((each) => each === call.input.shape) ?? "square";
+  state.imagesAsked += 1;
+  yield { type: "status", text: `${botName} is making a picture.` };
+  try {
+    const made = await images.make({ prompt, shape });
+    yield { type: "image", image: { prompt, ...made } };
+    return "Made. The Customer sees the picture with your reply.";
+  } catch (error) {
+    return error instanceof ImageError ? error.message : "The image model couldn't make that picture.";
+  }
 }
 
 /** One of the Bot's Skills in full, by the name it asked for. */
