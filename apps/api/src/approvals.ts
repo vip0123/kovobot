@@ -4,6 +4,7 @@ import type { AppDeps } from "./app.ts";
 import { type Customer, ownBotOnly } from "./customers.ts";
 import { apiError, UUID_PATTERN } from "./http.ts";
 import type { ActionKind, ActionOutcome, ActionRef, ActionTool } from "./actions.ts";
+import { runComposioAction } from "./composio.ts";
 import { runMcpAction } from "./mcp.ts";
 
 /** One action a Bot asked to take, as the Customer sees it. */
@@ -183,6 +184,8 @@ function runAction(deps: AppDeps, botId: string, ref: ActionRef, input: Record<s
   switch (ref.source) {
     case "mcp":
       return runMcpAction(deps, botId, ref, input);
+    case "composio":
+      return runComposioAction(deps, botId, ref, input);
   }
 }
 

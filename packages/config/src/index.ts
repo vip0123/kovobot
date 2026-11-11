@@ -53,6 +53,11 @@ export interface Config {
    * Null, the service sweeps on its own timers.
    */
   sweepKey: string | null;
+  /**
+   * Our Composio project's key (the Operator's, when self-hosted), for Connected apps: Composio
+   * hosts each app's sign-in and holds its tokens (ADR 0010). Null leaves Connected apps off.
+   */
+  composio: { apiKey: string } | null;
 }
 
 /** How the Bot service reaches the Computer service, its only client (ADR 0001). */
@@ -255,7 +260,18 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
     anthropicWorkspaceId: read("ANTHROPIC_WORKSPACE_ID") ?? null,
     computerService: null,
     sweepKey: null,
+    composio: null,
   };
+  const composioKey = read("COMPOSIO_API_KEY");
+  if (composioKey) {
+    config.composio = { apiKey: composioKey };
+    if (composioKey.startsWith("ck_")) {
+      warnings.push(
+        "COMPOSIO_API_KEY looks like a Composio Connect consumer key (ck_...), which is for one person's own apps in an MCP " +
+          "client: Composio's platform API refuses it. Connected apps need a project API key (ak_...), from Project Settings, API Keys.",
+      );
+    }
+  }
   const sweepKey = read("SWEEP_KEY");
   if (sweepKey && sweepKey.length < MIN_SECRET_LENGTH) {
     problems.push(`SWEEP_KEY must be at least ${MIN_SECRET_LENGTH} characters (openssl rand -base64 32).`);

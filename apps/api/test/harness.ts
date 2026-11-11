@@ -5,7 +5,8 @@ import { afterAll, beforeAll, expect, inject } from "vitest";
 import { loadConfig, type Env } from "@kovobot/config";
 import { createDb } from "@kovobot/db";
 import { type AppDeps, createApp } from "../src/app.ts";
-import { createComputerServiceClient, type ComputerService } from "../src/computers.ts";
+import { createComposioClient } from "../src/composio.ts";
+import { createComputerServiceClient } from "../src/computers.ts";
 import { liveViewUpgrade } from "../src/live-view.ts";
 import type { Email } from "../src/mailer.ts";
 import type { ModelAdapter, ModelAdapters } from "../src/models/adapter.ts";
@@ -13,6 +14,7 @@ import { createAnthropicAdapter } from "../src/models/anthropic.ts";
 import { createOpenAIAdapter } from "../src/models/openai.ts";
 import { createOpenAICompatibleAdapter } from "../src/models/openai-compatible.ts";
 import { FakeGoogle, type FakeGoogleAccount } from "./fake-google.ts";
+import { FAKE_COMPOSIO_KEY, FakeComposio } from "./fake-composio.ts";
 import { FakeComputerService } from "./fake-computer-service.ts";
 import { FakeAnthropic, FakeChatCompletions } from "./fake-models.ts";
 import { FAKE_OPENAI_KEY, FakeOpenAI } from "./fake-openai.ts";
@@ -26,7 +28,7 @@ import { FAKE_OPENAI_KEY, FakeOpenAI } from "./fake-openai.ts";
  */
 export function startTestServer(
   env: Env = {},
-  options: { openai?: boolean; openrouter?: boolean; local?: boolean; computers?: boolean } = {},
+  options: { openai?: boolean; openrouter?: boolean; local?: boolean; computers?: boolean; composio?: boolean } = {},
 ) {
   const db = createDb(inject("databaseUrl"));
   afterAll(() => db.end());
@@ -46,6 +48,12 @@ export function startTestServer(
       await new Promise((resolve) => listening.server?.close(resolve));
       await computerService.stop();
     });
+  }
+  // Composio, when on: Connected apps go through the real client to a local stand-in.
+  const composio = new FakeComposio();
+  if (options.composio) {
+    beforeAll(() => composio.start());
+    afterAll(() => composio.stop());
   }
   const openai = new FakeOpenAI();
   const anthropic = new FakeAnthropic();
@@ -107,6 +115,7 @@ export function startTestServer(
     computers: options.computers
       ? lazily(() => createComputerServiceClient({ url: computerService.baseUrl, apiKey: computerService.apiKey }))
       : null,
+    composio: options.composio ? lazily(() => createComposioClient({ apiKey: FAKE_COMPOSIO_KEY, baseUrl: composio.apiUrl })) : null,
     now: () => clock.now,
   };
   const app = createApp(deps);
@@ -123,6 +132,8 @@ export function startTestServer(
     anthropic,
     chatCompletions,
     computerService,
+    /** The stand-in for Composio, when `composio` is on. */
+    composio,
     /** The API listening on a real port, for WebSockets; set once the tests start, with `computers` on. */
     listening,
     /** A fresh browser: its own cookies, and the web app's Origin on every request. */
@@ -153,12 +164,12 @@ export function startTestServer(
   }
 }
 
-/** A Computer service client made on first call. */
-function lazily(make: () => ComputerService): ComputerService {
-  let client: ComputerService | undefined;
-  return new Proxy({} as ComputerService, {
-    get: (_target, method: keyof ComputerService) => (...args: never[]) =>
-      ((client ??= make())[method] as (...args: never[]) => unknown)(...args),
+/** A client made on first call, once its fake's address is known. */
+function lazily<Client extends object>(make: () => Client): Client {
+  let client: Client | undefined;
+  return new Proxy({} as Client, {
+    get: (_target, method: string | symbol) => (...args: never[]) =>
+      ((client ??= make())[method as keyof Client] as (...args: never[]) => unknown)(...args),
   });
 }
 

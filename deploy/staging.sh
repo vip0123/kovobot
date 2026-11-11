@@ -19,6 +19,9 @@
 #                                          our Model provider keys; deploy stores each one set
 #   LANDING_URL                            optional: the landing page that posts leads,
 #                                          e.g. https://kovobot.com
+#   COMPOSIO_API_KEY                       optional: our Composio project key (ak_...), for
+#                                          Connected apps; deploy stores it like the others
+# deploy also makes SWEEP_KEY, and the Cloud Scheduler job that runs the sweeps with it.
 set -euo pipefail
 
 # Settings not given on the command line come from .env. Values are never printed.
@@ -174,6 +177,16 @@ deploy() {
     sync_secret "$key"
     gcloud secrets describe "$key" --project "$PROJECT" >/dev/null 2>&1 && secrets="$secrets,$key=$key:latest"
   done
+
+  # Connected apps: our Composio project key, set in .env, the same way. A Composio Connect
+  # consumer key (ck_...) is for one person's apps in an MCP client, and Composio's platform API
+  # refuses it, so it isn't deployed.
+  if [[ "${COMPOSIO_API_KEY:-}" == ck_* ]]; then
+    echo "COMPOSIO_API_KEY is a Composio Connect consumer key (ck_...): Connected apps stay off. Put a project API key (ak_...) in .env." >&2
+  elif [[ -n "${COMPOSIO_API_KEY:-}" ]] || gcloud secrets describe COMPOSIO_API_KEY --project "$PROJECT" >/dev/null 2>&1; then
+    sync_secret COMPOSIO_API_KEY
+    secrets="$secrets,COMPOSIO_API_KEY=COMPOSIO_API_KEY:latest"
+  fi
 
   gcloud builds submit --tag "$image" --project "$PROJECT" .
 

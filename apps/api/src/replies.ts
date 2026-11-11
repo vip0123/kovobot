@@ -2,6 +2,7 @@ import { runTask } from "./agent.ts";
 import type { AppDeps } from "./app.ts";
 import { approvalDesk, attachApprovals } from "./approvals.ts";
 import { conversationForModel } from "./attachments.ts";
+import { appTools } from "./composio.ts";
 import { addMessage, recentMessages, RENEW_REPLY_CLAIM_MS, renewReplying, stopReplying } from "./conversations.ts";
 import { driveComputer, drivingFor } from "./driver.ts";
 import { type ModelAdapter, ModelError, type ModelProvider, type ThinkingEffort, uniquePages, type WebSource } from "./models/adapter.ts";
@@ -76,12 +77,14 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
     }
     const driving = await drivingFor(deps, bot.id);
     const skills = await botSkills(deps.db, bot.id);
+    const apps = await appTools(deps, bot);
     const tools = {
       ...(driving ? { useComputer: (task: string) => driveComputer(deps, driving, task) } : {}),
       ...(skills.length > 0 ? { skills: { list: skills, read: (name: string) => skillInstructions(deps.db, bot.id, name) } } : {}),
       notes: { list: await botNotes(deps.db, bot.id), book: notebook(deps.db, bot.id, deps.now) },
       schedules: scheduleBook(deps, bot.id, reply.timeZone ?? "UTC"),
-      connected: await mcpTools(deps, bot.id, bot.name),
+      connected: [...(await mcpTools(deps, bot.id, bot.name)), ...apps.connected],
+      ...(apps.appCatalog ? { appCatalog: apps.appCatalog } : {}),
       approvals: approvalDesk(deps, bot.id, conversationId),
     };
     const task = {

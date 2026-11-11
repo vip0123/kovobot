@@ -109,6 +109,27 @@ export interface Approval {
   createdAt: string;
 }
 
+/** One of the Customer's accounts on an outside app, connected through Composio. */
+export interface ConnectedApp {
+  id: string;
+  /** Composio's name for the app, e.g. gmail. */
+  toolkit: string;
+  name: string;
+  /** Which account, when there are several for one app. */
+  label: string | null;
+  state: "connecting" | "connected" | "failed";
+  createdAt: string;
+}
+
+/** An app Composio can connect. */
+export interface AppToolkit {
+  slug: string;
+  name: string;
+  description: string;
+  /** Usable without signing in to anything. */
+  noAuth: boolean;
+}
+
 /** A standing OK for one kind of action on one tool of a Bot. */
 export interface PreApproval {
   id: string;
@@ -270,6 +291,14 @@ export const api = {
   deleteBot: (id: string) => request<unknown>(`/bots/${id}`, { method: "DELETE" }),
   messages: (botId: string) => request<{ messages: Message[]; approvals: Approval[] }>(`/bots/${botId}/messages`),
   preApprovals: (botId: string) => request<{ preApprovals: PreApproval[] }>(`/bots/${botId}/pre-approvals`),
+  apps: () => request<{ apps: ConnectedApp[] }>("/apps"),
+  appCatalog: (search: string) => request<{ toolkits: AppToolkit[] }>(`/apps/catalog?search=${encodeURIComponent(search)}`),
+  /** Starts connecting an app: where to sign in to it, unless it needs no sign-in. */
+  connectApp: (toolkit: string) => request<{ app: ConnectedApp; signInUrl?: string }>("/apps", { method: "POST", json: { toolkit } }),
+  removeApp: (id: string) => request<unknown>(`/apps/${id}`, { method: "DELETE" }),
+  botApps: (botId: string) => request<{ apps: ConnectedApp[] }>(`/bots/${botId}/apps`),
+  grantApp: (botId: string, appId: string) => request<unknown>(`/bots/${botId}/apps/${appId}`, { method: "PUT" }),
+  revokeApp: (botId: string, appId: string) => request<unknown>(`/bots/${botId}/apps/${appId}`, { method: "DELETE" }),
   removePreApproval: (botId: string, id: string) => request<unknown>(`/bots/${botId}/pre-approvals/${id}`, { method: "DELETE" }),
 
   skills: () => request<{ skills: Skill[] }>("/skills"),

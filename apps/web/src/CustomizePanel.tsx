@@ -2,8 +2,10 @@ import { type FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router";
 import {
   api,
+  ApiError,
   BROWSER_TIME_ZONE,
   type Bot,
+  type ConnectedApp,
   errorMessage,
   type McpServer,
   type Note,
@@ -665,6 +667,81 @@ function ScheduleForm({
  * The MCP servers connected to the Bot, and their tools. A server that wants signing in sends
  * the Customer to its own sign-in page, which brings them back here.
  */
+/** Which of the Customer's Connected apps this Bot may use, given and taken back one by one. */
+function AppGrants({ bot }: { bot: Bot }) {
+  const [apps, setApps] = useState<ConnectedApp[] | null>(null);
+  const [given, setGiven] = useState<Set<string>>(new Set());
+  const [off, setOff] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([api.apps(), api.botApps(bot.id)]).then(
+      ([{ apps }, { apps: theirs }]) => {
+        setApps(apps.filter((app) => app.state === "connected"));
+        setGiven(new Set(theirs.map((app) => app.id)));
+      },
+      (caught: unknown) => {
+        setApps([]);
+        if (caught instanceof ApiError && caught.code === "apps_off") setOff(true);
+        else setError(errorMessage(caught));
+      },
+    );
+  }, [bot.id]);
+
+  async function toggle(app: ConnectedApp, give: boolean) {
+    setBusy(app.id);
+    setError(null);
+    try {
+      await (give ? api.grantApp(bot.id, app.id) : api.revokeApp(bot.id, app.id));
+      setGiven((current) => {
+        const next = new Set(current);
+        if (give) next.add(app.id);
+        else next.delete(app.id);
+        return next;
+      });
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (off) return null;
+  return (
+    <fieldset className="skill-grants">
+      <legend className="drawer-subhead">Connected apps</legend>
+      {apps === null ? (
+        <p className="muted small">Loading…</p>
+      ) : apps.length === 0 ? (
+        <p className="small">
+          You have no Connected apps yet. <Link to="/apps">Connect one</Link>, such as Gmail or GitHub.
+        </p>
+      ) : (
+        <>
+          {apps.map((app) => (
+            <label key={app.id} className="check-row skill-grant">
+              <input type="checkbox" checked={given.has(app.id)} disabled={busy === app.id} onChange={(event) => void toggle(app, event.target.checked)} />
+              <span className="skill-grant-text">
+                <span className="skill-grant-name">{app.name}</span>
+                {app.label && <span className="muted small">{app.label}</span>}
+              </span>
+            </label>
+          ))}
+          <Link to="/apps" className="small">
+            Manage your Connected apps
+          </Link>
+        </>
+      )}
+      {error && (
+        <p className="alert" role="alert">
+          {error}
+        </p>
+      )}
+    </fieldset>
+  );
+}
+
 /** What each kind of tool does, as the Tools tab says it. */
 const TOOL_KINDS: Record<McpServer["tools"][number]["kind"], string> = {
   read: "runs at once",
@@ -751,6 +828,8 @@ function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
 
   return (
     <div className="drawer-section">
+      <AppGrants bot={bot} />
+      <h3 className="drawer-subhead">MCP servers</h3>
       <p className="muted small">
         Connect an MCP server and {bot.name} can use its tools. Tools that only read run at once. Anything that sends, changes,
         deletes or pays asks you first, in the Conversation, showing exactly what it will do. What a tool sends back is

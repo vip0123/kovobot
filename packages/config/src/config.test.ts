@@ -240,3 +240,18 @@ describe("the sweeps", () => {
     expect(configProblems({ SWEEP_KEY: "short" })).toEqual([expect.stringMatching(/^SWEEP_KEY must be at least 32 characters/)]);
   });
 });
+
+describe("Connected apps", () => {
+  const projectKey = "ak_" + "a".repeat(20);
+
+  test("are off until a Composio key is set, hosted or self-hosted: then Bots use apps through Composio", () => {
+    expect(loadConfig({}).config.composio).toBeNull();
+    expect(loadConfig({ COMPOSIO_API_KEY: projectKey }).config.composio).toEqual({ apiKey: projectKey });
+    expect(loadConfig({ ...hostedEnv, COMPOSIO_API_KEY: projectKey }).config.composio).toEqual({ apiKey: projectKey });
+  });
+
+  test("a Composio Connect consumer key, which Composio's platform API refuses, is warned about", () => {
+    const { warnings } = loadConfig({ COMPOSIO_API_KEY: "ck_" + "b".repeat(20) });
+    expect(warnings).toContainEqual(expect.stringMatching(/^COMPOSIO_API_KEY looks like a Composio Connect consumer key \(ck_/));
+  });
+});
