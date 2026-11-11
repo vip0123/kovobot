@@ -11,6 +11,7 @@ import { apiError, sameOriginWrites } from "./http.ts";
 import { leadRoutes } from "./leads.ts";
 import type { Mailer } from "./mailer.ts";
 import type { ImageMaker } from "./media/images.ts";
+import type { Speaker, Transcriber } from "./media/speech.ts";
 import type { ModelAdapters } from "./models/adapter.ts";
 import { sweepRoutes } from "./sweeps.ts";
 
@@ -29,6 +30,10 @@ export interface AppDeps {
   composio: Composio | null;
   /** The image model Bots make pictures with; null where no Model provider with one is set up. */
   images: ImageMaker | null;
+  /** The speech-to-text model voice notes are heard with; null leaves voice notes off. */
+  transcriber: Transcriber | null;
+  /** The text-to-speech model replies are read aloud with; null leaves Listen off. */
+  speaker: Speaker | null;
   now: () => Date;
 }
 

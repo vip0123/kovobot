@@ -24,7 +24,21 @@ import {
   type WebSource,
 } from "./api.ts";
 import { BotAvatar } from "./BotAvatar.tsx";
-import { BulbIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, FileIcon, GlobeIcon, PaperclipIcon, ResearchIcon, SendIcon } from "./Icons.tsx";
+import {
+  BulbIcon,
+  CheckIcon,
+  ClockIcon,
+  CloseIcon,
+  CopyIcon,
+  FileIcon,
+  GlobeIcon,
+  MicIcon,
+  PaperclipIcon,
+  ResearchIcon,
+  SendIcon,
+  SpeakerIcon,
+  StopIcon,
+} from "./Icons.tsx";
 import { modelLabel } from "./ModelPicker.tsx";
 
 // The Markdown renderer loads with the first Bot page, not with sign-in; until then a reply shows as plain text.
@@ -84,6 +98,11 @@ function providerOf(catalog: ModelCatalog, model: string): string | undefined {
   return catalog.models.find((listed) => listed.id === model)?.provider;
 }
 
+/** What a voice note is recorded as, best first: the browser takes the first it can make. */
+const RECORDING_TYPES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
+/** The longest voice note, in seconds; well inside the 10 MB a recording may be. */
+const MAX_RECORDING_SECONDS = 300;
+
 /** A file picked to send, with a preview for images. */
 interface Picked {
   file: File;
@@ -140,6 +159,98 @@ export function Conversation({
   // xAI isn't sent reasoning options yet (unchecked there), so thinking deeper would do nothing.
   const canThinkHarder = provider !== "xai";
   const thinksHarder = thinkHarder && canThinkHarder;
+  const canHear = catalog.voice?.hear === true;
+  const canListen = catalog.voice?.speak === true;
+  // A voice note being recorded, how long it has run, and whether stopping it sends it.
+  const [recording, setRecording] = useState<MediaRecorder | null>(null);
+  const [recordedSeconds, setRecordedSeconds] = useState(0);
+  const sendRecording = useRef(false);
+  // The reply being read aloud, if any, and its player.
+  const [speech, setSpeech] = useState<{ messageId: string; state: "loading" | "playing" } | null>(null);
+  const player = useRef<HTMLAudioElement | null>(null);
+  const listeningTo = useRef<string | null>(null);
+
+  // The recording's clock, which stops it at the longest a voice note may be.
+  useEffect(() => {
+    if (!recording) return;
+    const started = Date.now();
+    const timer = setInterval(() => {
+      const seconds = Math.floor((Date.now() - started) / 1000);
+      setRecordedSeconds(seconds);
+      if (seconds >= MAX_RECORDING_SECONDS && recording.state === "recording") {
+        sendRecording.current = true;
+        recording.stop();
+      }
+    }, 250);
+    return () => clearInterval(timer);
+  }, [recording]);
+
+  // Leaving the Conversation stops a reply being read aloud.
+  useEffect(() => () => player.current?.pause(), []);
+
+  async function startRecording() {
+    if (recording || streaming !== null) return;
+    setError(null);
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      setError("Kovobot can't use your microphone. Allow it in your browser's site settings, then try again.");
+      return;
+    }
+    const mimeType = RECORDING_TYPES.find((type) => MediaRecorder.isTypeSupported(type));
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    };
+    recorder.onstop = () => {
+      for (const track of stream.getTracks()) track.stop();
+      setRecording(null);
+      if (sendRecording.current && chunks.length > 0) void sendMessage(undefined, new Blob(chunks, { type: recorder.mimeType }));
+    };
+    sendRecording.current = false;
+    setRecordedSeconds(0);
+    recorder.start(1000);
+    setRecording(recorder);
+  }
+
+  /** Stops recording, and sends the voice note or throws it away. */
+  function stopRecording(send: boolean) {
+    sendRecording.current = send;
+    if (recording?.state === "recording") recording.stop();
+  }
+
+  /** Reads one of the Bot's replies aloud, or stops it if it's the one being read. */
+  async function listen(messageId: string) {
+    const again = listeningTo.current === messageId;
+    stopListening();
+    if (again) return;
+    listeningTo.current = messageId;
+    setSpeech({ messageId, state: "loading" });
+    try {
+      const url = URL.createObjectURL(await api.speech(bot.id, messageId));
+      if (listeningTo.current !== messageId) return URL.revokeObjectURL(url);
+      const audio = new Audio(url);
+      player.current = audio;
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        if (listeningTo.current === messageId) stopListening();
+      };
+      setSpeech({ messageId, state: "playing" });
+      await audio.play();
+    } catch (caught) {
+      if (listeningTo.current === messageId) stopListening();
+      setError(errorMessage(caught));
+    }
+  }
+
+  function stopListening() {
+    player.current?.pause();
+    player.current = null;
+    listeningTo.current = null;
+    setSpeech(null);
+  }
 
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
@@ -200,19 +311,24 @@ export function Conversation({
     setPicked(picked.filter((_, at) => at !== index));
   }
 
-  async function sendMessage(event?: FormEvent) {
+  /** Sends what's written and attached, and, from the microphone, a voice note whose words join them. */
+  async function sendMessage(event?: FormEvent, voice?: Blob) {
     event?.preventDefault();
     const content = draft.trim();
-    if ((!content && picked.length === 0) || streaming !== null) return;
+    if ((!content && picked.length === 0 && !voice) || streaming !== null) return;
     setError(null);
     let attachments;
+    let voiceNote;
     try {
       attachments = await Promise.all(picked.map(async ({ file }) => ({ name: file.name, data: await base64(file) })));
+      if (voice) voiceNote = { data: await base64(voice) };
     } catch {
-      setError("An Attachment couldn't be read. Pick it again.");
+      setError(voice ? "The recording couldn't be read. Record it again." : "An Attachment couldn't be read. Pick it again.");
       return;
     }
     const sentFiles: Attachment[] = picked.map(({ file, preview }) => ({ name: file.name, mediaType: file.type, size: file.size, preview }));
+    // The recording plays from the browser until the saved message, with what it said, replaces it.
+    if (voice) sentFiles.push({ name: "Voice note", mediaType: voice.type || "audio/webm", size: voice.size, preview: URL.createObjectURL(voice) });
     const pendingId = localId("pending");
     const unsent = { draft, picked };
     setDraft("");
@@ -227,7 +343,7 @@ export function Conversation({
       const saved = await api.sendMessage(
         bot.id,
         content,
-        { attachments, thinkHarder: thinksHarder, webSearch: searching, research: researching },
+        { attachments, thinkHarder: thinksHarder, webSearch: searching, research: researching, ...(voiceNote ? { voiceNote } : {}) },
         {
           ...replyHandlers(reply),
           // The saved message replaces the one shown while sending, so its Attachments link straight away.
@@ -238,6 +354,8 @@ export function Conversation({
         },
       );
       replySaved(saved, reply);
+      // Spoken to, the Bot answers aloud too.
+      if (voice && canListen) void listen(saved.id);
     } catch (caught) {
       if (caught instanceof ApiError && caught.status >= 400) {
         // Refused before it was saved (too big, a file it can't take, the Bot busy): put it all back.
@@ -412,6 +530,11 @@ export function Conversation({
                   sources={message.sources ?? []}
                   searchSuggestions={message.searchSuggestions ?? undefined}
                   files={message.attachments ?? []}
+                  listen={
+                    canListen && /^\d+$/.test(message.id)
+                      ? { state: speech?.messageId === message.id ? speech.state : "idle", onToggle: () => void listen(message.id) }
+                      : undefined
+                  }
                 />
                 {approvals
                   .filter((approval) => approval.messageId === message.id)
@@ -487,7 +610,20 @@ export function Conversation({
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={sendOnEnter}
             onPaste={pasteFiles}
+            disabled={recording !== null}
           />
+          {recording ? (
+            <div className="recording-bar" role="status">
+              <span className="recording-dot" aria-hidden="true" />
+              <span className="recording-time">Recording {formatSeconds(recordedSeconds)}</span>
+              <button type="button" className="button ghost small" onClick={() => stopRecording(false)}>
+                Cancel
+              </button>
+              <button type="button" className="button primary small" onClick={() => stopRecording(true)}>
+                Send voice note
+              </button>
+            </div>
+          ) : (
           <div className="composer-tools">
             <input
               ref={fileInput}
@@ -511,6 +647,18 @@ export function Conversation({
             >
               <PaperclipIcon size={19} />
             </button>
+            {canHear && (
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Record a voice note"
+                title="Record a voice note: what you say is sent as your message"
+                disabled={streaming !== null}
+                onClick={() => void startRecording()}
+              >
+                <MicIcon size={19} />
+              </button>
+            )}
             {canThinkHarder && (
               <button
                 type="button"
@@ -559,6 +707,7 @@ export function Conversation({
               <SendIcon size={18} />
             </button>
           </div>
+          )}
         </form>
         {empty ? (
           <div className="suggestions">
@@ -708,6 +857,10 @@ function MessageFiles({ bot, files, className }: { bot: Bot; files: Attachment[]
     <div className={className}>
       {files.map((file, index) => {
         const url = file.id ? api.attachmentUrl(bot.id, file.id) : undefined;
+        // A voice note's recording plays here; its words are the message.
+        if (file.mediaType.startsWith("audio/") && (url ?? file.preview)) {
+          return <audio key={file.id ?? index} className="voice-note" controls preload="none" src={url ?? file.preview} aria-label="Voice note" />;
+        }
         const image = file.mediaType.startsWith("image/");
         if (image && (file.preview ?? url)) {
           return (
@@ -745,6 +898,7 @@ function BotMessage({
   files = [],
   streaming = false,
   status = null,
+  listen,
 }: {
   bot: Bot;
   text: string;
@@ -755,6 +909,8 @@ function BotMessage({
   files?: Attachment[];
   streaming?: boolean;
   status?: string | null;
+  /** Reading the reply aloud, where replies can be: whether it is, and how to start or stop it. */
+  listen?: { state: "idle" | "loading" | "playing"; onToggle: () => void };
 }) {
   // Open while the model is still thinking; folded away once it answers.
   const thinkingNow = streaming && !text;
@@ -792,7 +948,12 @@ function BotMessage({
         )}
         {files.length > 0 && <MessageFiles bot={bot} files={files} className="bot-files" />}
         {sources.length > 0 && <Sources sources={sources} searchSuggestions={searchSuggestions} />}
-        {!streaming && text && <CopyButton text={text} />}
+        {!streaming && text && (
+          <div className="message-tools">
+            <CopyButton text={text} />
+            {listen && <ListenButton {...listen} />}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -841,22 +1002,42 @@ function CopyButton({ text }: { text: string }) {
   }
 
   return (
-    <div className="message-tools">
-      <button
-        type="button"
-        className="icon-button tiny"
-        aria-label={copied ? "Copied" : "Copy the reply"}
-        title={copied ? "Copied" : "Copy the reply"}
-        onClick={() => void copy()}
-      >
-        {copied ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
-      </button>
-    </div>
+    <button
+      type="button"
+      className="icon-button tiny"
+      aria-label={copied ? "Copied" : "Copy the reply"}
+      title={copied ? "Copied" : "Copy the reply"}
+      onClick={() => void copy()}
+    >
+      {copied ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+    </button>
   );
 }
 
-/** A file's contents as base64, for sending in the message's JSON. */
-function base64(file: File): Promise<string> {
+/** Reads the reply aloud, or stops it. */
+function ListenButton({ state, onToggle }: { state: "idle" | "loading" | "playing"; onToggle: () => void }) {
+  const label = state === "playing" ? "Stop reading aloud" : state === "loading" ? "Getting the reply read aloud…" : "Read aloud";
+  return (
+    <button
+      type="button"
+      className={`icon-button tiny${state === "idle" ? "" : " active"}`}
+      aria-label={label}
+      title={label}
+      aria-pressed={state !== "idle"}
+      onClick={onToggle}
+    >
+      {state === "playing" ? <StopIcon size={16} /> : <SpeakerIcon size={16} />}
+    </button>
+  );
+}
+
+/** A recording's length, as minutes and seconds. */
+function formatSeconds(seconds: number): string {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/** A file's contents, or a recording's, as base64, for sending in the message's JSON. */
+function base64(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");

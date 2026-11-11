@@ -4,8 +4,27 @@ import { TINY_PNG } from "./fake-openai.ts";
 
 export const FAKE_GEMINI_KEY = "test-gemini-key";
 
-/** What the fake's next interaction gives: a picture, words instead of one, or an HTTP failure. */
-type NextInteraction = { kind: "image" } | { kind: "words"; text: string } | { kind: "fail"; status: number };
+/** What the fake's next interaction gives, when told: words, or an HTTP failure. */
+type NextInteraction = { kind: "words"; text: string } | { kind: "fail"; status: number };
+
+/** A WAV file of a moment of silence: what the fake speech model says. */
+export const TINY_WAV = (() => {
+  const samples = Buffer.alloc(480);
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0, "latin1");
+  header.writeUInt32LE(36 + samples.length, 4);
+  header.write("WAVEfmt ", 8, "latin1");
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(24_000, 24);
+  header.writeUInt32LE(48_000, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36, "latin1");
+  header.writeUInt32LE(samples.length, 40);
+  return Buffer.concat([header, samples]);
+})();
 
 /**
  * A local stand-in for Google's Interactions API, which its image, speech and transcription models
@@ -15,10 +34,15 @@ type NextInteraction = { kind: "image" } | { kind: "words"; text: string } | { k
 export class FakeGeminiInteractions {
   readonly requests: Array<{ path: string; apiKey: string | undefined; body: Record<string, unknown> }> = [];
   baseUrl = "";
-  private next: NextInteraction = { kind: "image" };
+  /** What the transcription model hears in a recording. */
+  transcript = "Two loaves of rye, please.";
+  private next: NextInteraction | null = null;
   private server: Server | undefined;
 
-  /** The next interaction answers with this; after it, with a picture again. */
+  /**
+   * The next interaction answers with this. Otherwise it answers as asked: speech for a request
+   * for audio, the transcript for a recording, and a picture for anything else.
+   */
   answerNext(next: NextInteraction): void {
     this.next = next;
   }
@@ -45,16 +69,24 @@ export class FakeGeminiInteractions {
     const apiKey = request.headers["x-goog-api-key"] as string | undefined;
     this.requests.push({ path, apiKey, body });
     const next = this.next;
-    this.next = { kind: "image" };
+    this.next = null;
     if (apiKey !== FAKE_GEMINI_KEY) {
       sendJson(response, 400, { error: { code: 400, message: "API key not valid.", status: "INVALID_ARGUMENT" } });
       return;
     }
-    if (next.kind === "fail") {
+    if (next?.kind === "fail") {
       sendJson(response, next.status, { error: { code: next.status, message: "The model is overloaded.", status: "UNAVAILABLE" } });
       return;
     }
-    const content = next.kind === "image" ? [{ type: "image", data: TINY_PNG, mime_type: "image/png" }] : [{ type: "text", text: next.text }];
+    const asksForAudio = (body.response_format as { type?: string } | undefined)?.type === "audio";
+    const hearsAudio = Array.isArray(body.input) && body.input.some((part) => (part as { type?: string }).type === "audio");
+    const content = next
+      ? [{ type: "text", text: next.text }]
+      : asksForAudio
+        ? [{ type: "audio", data: TINY_WAV.toString("base64"), mime_type: "audio/wav" }]
+        : hearsAudio
+          ? [{ type: "text", text: this.transcript }]
+          : [{ type: "image", data: TINY_PNG, mime_type: "image/png" }];
     sendJson(response, 200, {
       id: `interaction-${this.requests.length}`,
       status: "completed",

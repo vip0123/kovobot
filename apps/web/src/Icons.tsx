@@ -136,6 +136,26 @@ export const SlidersIcon = (props: IconProps) => (
   </Icon>
 );
 
+export const MicIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="9" y="3" width="6" height="11" rx="3" />
+    <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" />
+  </Icon>
+);
+
+export const StopIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="6.5" y="6.5" width="11" height="11" rx="2" />
+  </Icon>
+);
+
+export const SpeakerIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z" />
+    <path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11" />
+  </Icon>
+);
+
 export const ResearchIcon = (props: IconProps) => (
   <Icon {...props}>
     <circle cx="10.5" cy="10.5" r="6.5" />
