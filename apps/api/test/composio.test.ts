@@ -215,3 +215,21 @@ describe("Connected apps", () => {
     });
   });
 });
+
+describe("Connected apps, when Composio refuses the key", () => {
+  test("the Customer hears who can fix it, and never a piece of the key", async () => {
+    const { browser } = await signedIn();
+    server.composio.refuseKey = true;
+    try {
+      const response = await browser.get("/api/apps/catalog?search=mail");
+      expect(response.status).toBe(503);
+      const body = (await response.json()) as { error: { code: string; message: string } };
+      expect(body).toEqual({
+        error: { code: "composio_refused_key", message: "Composio refused this Kovobot's key: whoever runs it needs to fix COMPOSIO_API_KEY." },
+      });
+      expect(JSON.stringify(body)).not.toContain("ak_");
+    } finally {
+      server.composio.refuseKey = false;
+    }
+  });
+});

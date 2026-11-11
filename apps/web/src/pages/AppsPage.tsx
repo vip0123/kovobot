@@ -162,7 +162,7 @@ function ConnectedApps() {
                 {toolkits === null ? (
                   <p className="muted small">Loading…</p>
                 ) : toolkits.length === 0 ? (
-                  <p className="empty-list small">No app by that name.</p>
+                  !error && <p className="empty-list small">No app by that name.</p>
                 ) : (
                   <ul className="app-list">
                     {toolkits.map((toolkit) => (
