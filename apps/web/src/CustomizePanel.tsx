@@ -757,12 +757,33 @@ function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
   const [servers, setServers] = useState<McpServer[] | null>(null);
   const [preApprovals, setPreApprovals] = useState<PreApproval[]>([]);
   const [url, setUrl] = useState("");
+  // Self-hosted: programs on this machine the Operator lets Bots use, picked by name.
+  const [localServers, setLocalServers] = useState<string[]>([]);
+  const [local, setLocal] = useState("");
+
+  async function addLocal(event: FormEvent) {
+    event.preventDefault();
+    setConnecting(true);
+    setError(null);
+    try {
+      const { server } = await api.addLocalMcpServer(bot.id, local);
+      setServers((current) => [...(current ?? []), server]);
+      setLocal("");
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setConnecting(false);
+    }
+  }
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api.mcpServers(bot.id).then(
-      ({ servers }) => setServers(servers),
+      ({ servers, localServers }) => {
+        setServers(servers);
+        setLocalServers(localServers);
+      },
       (caught: unknown) => {
         setServers([]);
         setError(errorMessage(caught));
@@ -850,7 +871,7 @@ function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
                   {server.state === "connected" ? "Connected" : "Needs sign-in"}
                 </span>
               </div>
-              <p className="muted small schedule-when">{server.url}</p>
+              <p className="muted small schedule-when">{server.url.startsWith("local:") ? "Runs on this machine" : server.url}</p>
               {server.tools.length > 0 && (
                 <ul className="mcp-tools small">
                   {server.tools.map((tool) => (
@@ -899,6 +920,24 @@ function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
             ))}
           </ul>
         </>
+      )}
+      {localServers.length > 0 && (
+        <form className="note-add" onSubmit={addLocal}>
+          <label htmlFor="mcp-local" className="visually-hidden">
+            A local MCP server
+          </label>
+          <select id="mcp-local" value={local} onChange={(event) => setLocal(event.target.value)}>
+            <option value="">A server on this machine…</option>
+            {localServers.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+          <button type="submit" className="button secondary small" disabled={connecting || !local}>
+            Add
+          </button>
+        </form>
       )}
       <form className="note-add" onSubmit={connect}>
         <label htmlFor="mcp-url" className="visually-hidden">

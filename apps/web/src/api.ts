@@ -308,7 +308,10 @@ export const api = {
   updateSkill: (id: string, change: Partial<SkillFields>) =>
     request<{ skill: Skill }>(`/skills/${id}`, { method: "PATCH", json: change }),
   deleteSkill: (id: string) => request<unknown>(`/skills/${id}`, { method: "DELETE" }),
-  mcpServers: (botId: string) => request<{ servers: McpServer[] }>(`/bots/${botId}/mcp-servers`),
+  /** The Bot's MCP servers, and the local ones (self-hosted) the Operator lets Bots use. */
+  mcpServers: (botId: string) => request<{ servers: McpServer[]; localServers: string[] }>(`/bots/${botId}/mcp-servers`),
+  addLocalMcpServer: (botId: string, name: string) =>
+    request<{ server: McpServer }>(`/bots/${botId}/mcp-servers`, { method: "POST", json: { local: name } }),
   connectMcpServer: (botId: string, url: string) =>
     request<{ server: McpServer }>(`/bots/${botId}/mcp-servers`, { method: "POST", json: { url } }),
   removeMcpServer: (botId: string, id: string) => request<unknown>(`/bots/${botId}/mcp-servers/${id}`, { method: "DELETE" }),

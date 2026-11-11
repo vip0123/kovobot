@@ -120,6 +120,16 @@ A Computer is a Linux desktop with Firefox that one Bot has. The Bot uses it thr
 - **Docker access.** The Computer service drives Docker through its socket, which gives it full control of Docker on this machine. Run it only where you'd run Docker yourself.
 - **Its licence.** The Computer service (`apps/computers`) carries the [Functional Source License](apps/computers/LICENSE.md): run it for yourself or your organisation, but not as a service that competes with Kovobot. Each version becomes Apache-2.0 two years after its release.
 
+## Local MCP servers
+
+Bots can use MCP servers on the web, and also programs on this machine that you list. Put them in `.env` as one line of JSON, by name, in Claude Desktop's `mcpServers` form or the map inside it:
+
+```sh
+MCP_LOCAL_SERVERS={"time": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-time"]}}
+```
+
+Restart, and each Bot's Tools tab offers them to add. Only what you list runs: nobody can type a command in. Each starts for the call that needs it, with only a few safe variables (such as `PATH` and `HOME`) plus its own `env`, never Kovobot's settings or keys. In Docker, the program must be in the image; `npx` and `node` are.
+
 ## Keep it running
 
 - **Update.** Run `git pull && docker compose up -d --build`, adding `--profile computers` if you use Computers. Database migrations run each time Kovobot starts.
