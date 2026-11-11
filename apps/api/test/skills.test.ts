@@ -245,13 +245,18 @@ describe("a Bot's Skills", () => {
     });
   });
 
-  test("a Bot can have up to 20 Skills", { timeout: 20_000 }, async () => {
+  test("a Bot can have up to 20 Skills, even granted at once", { timeout: 20_000 }, async () => {
     const browser = await signedInBrowser();
     const bot = await createBot(browser);
-    for (let i = 1; i <= 20; i++) {
+    for (let i = 1; i <= 17; i++) {
       const skill = await createSkill(browser, { ...WEEKLY_REPORT, name: `Skill ${i}` });
       expect((await grant(browser, bot, skill)).status).toBe(204);
     }
+    // Five at once, with room for three: each waits for the one before, so exactly three fit.
+    const more = [];
+    for (let i = 1; i <= 5; i++) more.push(await createSkill(browser, { ...WEEKLY_REPORT, name: `Burst ${i}` }));
+    const burst = await Promise.all(more.map((skill) => grant(browser, bot, skill)));
+    expect(burst.map((response) => response.status).sort()).toEqual([204, 204, 204, 409, 409]);
     const one = await createSkill(browser, { ...WEEKLY_REPORT, name: "One too many" });
 
     const refused = await grant(browser, bot, one);

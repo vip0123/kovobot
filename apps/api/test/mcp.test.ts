@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { FAKE_MCP_ACCESS_TOKEN, FakeMcpServer } from "./fake-mcp.ts";
+import { FAKE_MCP_ACCESS_TOKEN, FakeMcpServer, FakeSessionMcpServer } from "./fake-mcp.ts";
 import { type Browser, serverSentEvents, startTestServer, uniqueEmail } from "./harness.ts";
 
 // MCP tools (ticket 17): a Customer connects a remote MCP server to a Bot, signing in to it
@@ -7,8 +7,9 @@ import { type Browser, serverSentEvents, startTestServer, uniqueEmail } from "./
 // rest wait for Approvals (ticket 18). What a tool returns is Outside content.
 const server = startTestServer();
 const mcp = new FakeMcpServer();
-beforeAll(() => mcp.start());
-afterAll(() => mcp.stop());
+const older = new FakeSessionMcpServer();
+beforeAll(() => Promise.all([mcp.start(), older.start()]));
+afterAll(() => Promise.all([mcp.stop(), older.stop()]));
 
 interface McpServer {
   id: string;
@@ -91,7 +92,7 @@ describe("MCP servers", () => {
     // Outside content: a note written after it is marked for the Customer to check.
     server.openai.addOutput(
       { type: "function_call", id: "fc_a", call_id: "call_a", name: "bakery_orders__lookup_order", arguments: '{"order":7}', status: "completed" },
-      { type: "function_call", id: "fc_b", call_id: "call_b", name: "remember", arguments: '{"note":"Order 7 is paid."}', status: "completed" },
+      { type: "function_call", id: "fc_b", call_id: "call_b", name: "note", arguments: '{"action":"add","note":"Order 7 is paid."}', status: "completed" },
     );
     await chat(browser, bot, "Look up order 7 and remember it.");
     const notes = ((await (await browser.get(`/api/bots/${bot.id}/notes`)).json()) as { notes: Array<{ afterOutsideContent: boolean }> }).notes;
@@ -144,6 +145,21 @@ describe("MCP servers", () => {
     server.openai.replyWith("Hello.");
     await chat(browser, bot, "Hi");
     expect(offeredTools()).not.toContain("bakery_orders__lookup_order");
+  });
+
+  test("an older server, which keeps a session, works too", async () => {
+    const { browser, bot } = await signedInBot();
+    const connected = await connect(browser, bot, older.url);
+    expect(connected.status).toBe(201);
+    expect(await connected.json()).toMatchObject({
+      server: { name: "Corner shop", state: "connected", tools: [{ name: "todays_specials", readOnly: true }] },
+    });
+    expect(older.sessions.size).toBeGreaterThan(0);
+
+    modelCalls("corner_shop__todays_specials", {}, "Rye is half price today.");
+    await chat(browser, bot, "Any specials?");
+    expect(older.calls).toEqual(["todays_specials"]);
+    expect(server.openai.requests.at(-1)!.input.at(-1)).toMatchObject({ output: "Rye loaf, half price." });
   });
 
   test("an address that isn't an MCP server, or can't be reached, is refused, saying so", async () => {

@@ -1,7 +1,7 @@
 import { type Context, Hono } from "hono";
 import type { Db } from "@kovobot/db";
 import type { AppDeps } from "./app.ts";
-import { type Customer, ownBotOnly } from "./customers.ts";
+import { type Customer, ownBotOnly, withBotHeld } from "./customers.ts";
 import { apiError, jsonBody } from "./http.ts";
 
 /** Something a Bot keeps in mind across Conversations. The Bot writes it; the Customer can change it. */
@@ -115,13 +115,15 @@ type Author = { writtenBy: Note["writtenBy"]; afterOutsideContent: boolean };
 
 /** Adds a note, unless the Bot already keeps as many as it may: then null. */
 async function addNote(db: Db, botId: string, content: string, author: Author, now: Date): Promise<Note | null> {
-  const { rows } = await db.query<Note>(
-    `INSERT INTO notes (bot_id, content, written_by, after_outside_content, created_at, updated_at)
-     SELECT $1, $2, $3, $4, $5, $5 WHERE (SELECT count(*) FROM notes WHERE bot_id = $1) < $6
-     RETURNING ${NOTE_COLUMNS}`,
-    [botId, content, author.writtenBy, author.afterOutsideContent, now, MAX_NOTES_PER_BOT],
-  );
-  return rows[0] ?? null;
+  return withBotHeld(db, botId, async (client) => {
+    const { rows } = await client.query<Note>(
+      `INSERT INTO notes (bot_id, content, written_by, after_outside_content, created_at, updated_at)
+       SELECT $1, $2, $3, $4, $5, $5 WHERE (SELECT count(*) FROM notes WHERE bot_id = $1) < $6
+       RETURNING ${NOTE_COLUMNS}`,
+      [botId, content, author.writtenBy, author.afterOutsideContent, now, MAX_NOTES_PER_BOT],
+    );
+    return rows[0] ?? null;
+  });
 }
 
 /**

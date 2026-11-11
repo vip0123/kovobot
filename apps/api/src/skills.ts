@@ -1,7 +1,7 @@
 import { type Context, Hono } from "hono";
 import type { Db } from "@kovobot/db";
 import type { AppDeps } from "./app.ts";
-import { type Customer, ownsBot } from "./customers.ts";
+import { type Customer, ownsBot, withBotHeld } from "./customers.ts";
 import { apiError, botNotFound, jsonBody, UUID_PATTERN } from "./http.ts";
 
 /** Instructions a Customer writes once for one kind of work, and grants to their Bots. */
@@ -83,11 +83,13 @@ export function skillRoutes(deps: AppDeps) {
     const [botId, skillId] = [c.req.param("id"), c.req.param("skillId")];
     const { rowCount: had } = await deps.db.query("SELECT 1 FROM bot_skills WHERE bot_id = $1 AND skill_id = $2", [botId, skillId]);
     if (had === 1) return c.body(null, 204);
-    const { rowCount } = await deps.db.query(
-      `INSERT INTO bot_skills (bot_id, skill_id)
-       SELECT $1, $2 WHERE (SELECT count(*) FROM bot_skills WHERE bot_id = $1) < $3
-       ON CONFLICT DO NOTHING`,
-      [botId, skillId, MAX_SKILLS_PER_BOT],
+    const { rowCount } = await withBotHeld(deps.db, botId, (client) =>
+      client.query(
+        `INSERT INTO bot_skills (bot_id, skill_id)
+         SELECT $1, $2 WHERE (SELECT count(*) FROM bot_skills WHERE bot_id = $1) < $3
+         ON CONFLICT DO NOTHING`,
+        [botId, skillId, MAX_SKILLS_PER_BOT],
+      ),
     );
     if (rowCount === 0) {
       return apiError(c, 409, "too_many_skills", `A Bot can have up to ${MAX_SKILLS_PER_BOT} Skills. Take one away first.`);

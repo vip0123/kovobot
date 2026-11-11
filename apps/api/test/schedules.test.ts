@@ -1,10 +1,15 @@
 import { describe, expect, test } from "vitest";
+import { addMessage, startReplying, webConversation } from "../src/conversations.ts";
 import { fireDueSchedules } from "../src/firings.ts";
 import { type Browser, serverSentEvents, startTestServer, uniqueEmail } from "./harness.ts";
 
 // Schedules (ticket 22): a Customer, or the Bot when the Customer asks, sets one-off or
 // repeating schedules. Each firing is one Task, whose reply lands in the Bot's Conversation.
-const server = startTestServer();
+/** The key an outside scheduler presents to run the sweeps. */
+const SWEEP_KEY = "sweep-key-that-is-long-enough-1234";
+const server = startTestServer({ SWEEP_KEY });
+/** A Bot service that keeps its own clock: no outside scheduler. It sets no schedules. */
+const ownClock = startTestServer();
 
 interface Schedule {
   id: string;
@@ -53,6 +58,20 @@ function write(browser: Browser, method: "PATCH" | "DELETE", path: string, body?
 
 function advanceTo(when: string) {
   server.clock.now = new Date(when);
+}
+
+/**
+ * What a server that stops in the middle of a firing leaves behind: the schedule moved on, its
+ * message in the Conversation with no reply, and a claim on the Conversation that nobody renews.
+ */
+async function cutOff(bot: { id: string }, schedule: Schedule, at: string, { answeredAgain = false } = {}) {
+  const now = new Date(at);
+  const { db } = server.deps;
+  await db.query("UPDATE schedules SET last_run_at = $2, next_run_at = $2::timestamptz + interval '1 day' WHERE id = $1", [schedule.id, now]);
+  const conversationId = await webConversation(db, bot.id, now);
+  const message = await addMessage(db, conversationId, "user", schedule.task, now, { scheduleId: schedule.id });
+  if (answeredAgain) await db.query("UPDATE messages SET answered_again = true WHERE id = $1", [message.id]);
+  expect(await startReplying(db, conversationId, now)).toBe(true);
 }
 
 /** The model's next answer calls `name` with `input`, then says `reply`. */
@@ -189,9 +208,17 @@ describe("schedules a Customer sets", () => {
     }
   });
 
-  test("a Bot has up to 20 schedules, and only its Customer sees or changes them", async () => {
+  test("a Bot has up to 20 schedules, even set at once, and only its Customer sees or changes them", async () => {
     const { browser, bot } = await botAt("2026-11-05T12:00:00Z");
-    for (let i = 0; i < 20; i++) await schedule(browser, bot, { task: `Task ${i}`, when: { repeat: "daily", time: "09:00" }, timeZone: "UTC" });
+    for (let i = 0; i < 17; i++) await schedule(browser, bot, { task: `Task ${i}`, when: { repeat: "daily", time: "09:00" }, timeZone: "UTC" });
+    // Five at once, with room for three: each waits for the one before, so exactly three fit.
+    const burst = await Promise.all(
+      Array.from({ length: 5 }, (_, i) =>
+        browser.post(`/api/bots/${bot.id}/schedules`, { task: `Burst ${i}`, when: { repeat: "daily", time: "09:00" }, timeZone: "UTC" }),
+      ),
+    );
+    expect(burst.map((response) => response.status).sort()).toEqual([201, 201, 201, 409, 409]);
+    expect(await schedulesOf(browser, bot)).toHaveLength(20);
     const full = await browser.post(`/api/bots/${bot.id}/schedules`, { task: "One more", when: { repeat: "daily", time: "09:00" }, timeZone: "UTC" });
     expect(full.status).toBe(409);
     expect(await full.json()).toEqual({ error: { code: "too_many_schedules", message: "A Bot can have up to 20 schedules. Delete one first." } });
@@ -208,7 +235,7 @@ describe("schedules a Customer sets", () => {
 describe("schedules the Bot sets", () => {
   test("the Bot knows the Customer's date and time, and sets a schedule when asked, in their time zone", async () => {
     const { browser, bot } = await botAt("2026-11-05T12:00:00Z");
-    modelCalls("schedule_task", { task: "Send me the day's orders.", repeat: "daily", time: "08:00" }, "Done.");
+    modelCalls("schedule", { action: "set", task: "Send me the day's orders.", repeat: "daily", time: "08:00" }, "Done.");
 
     const response = await browser.post(`/api/bots/${bot.id}/messages`, { content: "Every morning at 8, send me the day's orders.", timeZone: "Europe/London" });
     const events = await serverSentEvents(response);
@@ -221,11 +248,11 @@ describe("schedules the Bot sets", () => {
     expect(set).toMatchObject({ task: "Send me the day's orders.", when: { repeat: "daily", time: "08:00" }, timeZone: "Europe/London", createdBy: "bot" });
     expect(lastToolOutput()).toBe(`Scheduled (${set!.id}): every day at 08:00, Europe/London time. It next runs on Friday 6 November 2026 at 08:00.`);
 
-    modelCalls("list_schedules", {});
+    modelCalls("schedule", { action: "list" });
     await browser.post(`/api/bots/${bot.id}/messages`, { content: "What have you got scheduled?" }).then(serverSentEvents);
     expect(lastToolOutput()).toBe(`${set!.id}: "Send me the day's orders." every day at 08:00, Europe/London time; next on Friday 6 November 2026 at 08:00.`);
 
-    modelCalls("cancel_schedule", { id: set!.id });
+    modelCalls("schedule", { action: "cancel", id: set!.id });
     await browser.post(`/api/bots/${bot.id}/messages`, { content: "Stop the morning orders." }).then(serverSentEvents);
     expect(lastToolOutput()).toBe(`Cancelled ${set!.id}.`);
     expect(await schedulesOf(browser, bot)).toEqual([]);
@@ -237,12 +264,12 @@ describe("schedules the Bot sets", () => {
       "or your Computer's screen. Ask the Customer to set it in a new message, or on your page.";
     const { browser, bot } = await botAt("2026-11-05T12:00:00Z");
     server.openai.citeSources({ url: "https://example.com", title: "A page" });
-    modelCalls("schedule_task", { task: "Email everyone hourly.", repeat: "daily", time: "08:00" });
+    modelCalls("schedule", { action: "set", task: "Email everyone hourly.", repeat: "daily", time: "08:00" });
     await browser.post(`/api/bots/${bot.id}/messages`, { content: "Read this page.", webSearch: true }).then(serverSentEvents);
     expect(lastToolOutput()).toBe(refusal);
 
     // A search whose pages the reply doesn't cite was read all the same.
-    modelCalls("schedule_task", { task: "Email everyone hourly.", repeat: "daily", time: "08:00" });
+    modelCalls("schedule", { action: "set", task: "Email everyone hourly.", repeat: "daily", time: "08:00" });
     await browser.post(`/api/bots/${bot.id}/messages`, { content: "Search for that again.", webSearch: true }).then(serverSentEvents);
     expect(lastToolOutput()).toBe(refusal);
     expect(await schedulesOf(browser, bot)).toEqual([]);
@@ -284,5 +311,61 @@ describe("firings that go wrong", () => {
       { role: "assistant", content: "I couldn't do this scheduled task: the model didn't answer. It runs again at its next time." },
     ]);
     server.openai.replyWith("OK.");
+  });
+
+  test("a firing that a restart cut off is answered again, once, and says so if that is cut off too", async () => {
+    const { browser, bot } = await botAt("2026-11-05T12:00:00Z");
+    // Only this file sets schedules: switching off those its earlier tests left keeps them from taking this one's replies.
+    await server.deps.db.query("UPDATE schedules SET enabled = false WHERE bot_id <> $1", [bot.id]);
+    const daily = await schedule(browser, bot, { task: "Daily summary.", when: { repeat: "daily", time: "12:05" }, timeZone: "UTC" });
+    await cutOff(bot, daily, "2026-11-05T12:05:00Z");
+
+    // Until its claim lapses, the Task may still be running on another server.
+    advanceTo("2026-11-05T12:08:00Z");
+    await fireDueSchedules(server.deps);
+    expect(await history(browser, bot)).toHaveLength(1);
+
+    advanceTo("2026-11-05T12:11:00Z");
+    server.openai.replyWith("Three orders today.");
+    await fireDueSchedules(server.deps);
+    expect(await history(browser, bot)).toMatchObject([
+      { role: "user", content: "Daily summary." },
+      { role: "assistant", content: "Three orders today." },
+    ]);
+    expect(String(server.openai.requests.at(-1)!.input.at(-1)!.content)).toBe(
+      "[A schedule the Customer set runs this now, Thursday 5 November 2026, 12:11, UTC. Kovobot restarted while you were " +
+        "doing it before, so some of it may be done already: don't do anything twice. Do it, and reply with what you did or found.]\nDaily summary.",
+    );
+
+    // The next day's firing is cut off on its second try too: it says so, rather than trying forever.
+    await cutOff(bot, daily, "2026-11-06T12:05:00Z", { answeredAgain: true });
+    advanceTo("2026-11-06T12:11:00Z");
+    await fireDueSchedules(server.deps);
+    expect((await history(browser, bot)).at(-1)).toMatchObject({
+      role: "assistant",
+      content: "I couldn't finish this scheduled task: Kovobot restarted while I was doing it, twice. It runs again at its next time.",
+    });
+  });
+});
+
+describe("an outside scheduler", () => {
+  test("runs the sweep with the key, and is answered once the firings it started are done", async () => {
+    const { browser, bot } = await botAt("2026-11-05T12:00:00Z");
+    await schedule(browser, bot, { task: "Check the oven.", when: { repeat: "daily", time: "12:07" }, timeZone: "UTC" });
+    advanceTo("2026-11-05T12:07:00Z");
+    const tick = (on: typeof server, key?: string) =>
+      on.browser().send("/api/sweep", { method: "POST", headers: key ? { "x-sweep-key": key } : {} });
+
+    expect((await tick(server)).status).toBe(401);
+    expect((await tick(server, "x".repeat(44))).status).toBe(401);
+    expect(await history(browser, bot)).toEqual([]);
+
+    server.openai.replyWith("The oven is fine.");
+    expect((await tick(server, SWEEP_KEY)).status).toBe(204);
+    // On Cloud Run an instance has CPU only while a request is open, so the sweep is done by the answer.
+    expect((await history(browser, bot)).map((message) => message.content)).toEqual(["Check the oven.", "The oven is fine."]);
+
+    // Without a key set, the Bot service keeps its own clock, and there is no such route.
+    expect((await tick(ownClock, SWEEP_KEY)).status).toBe(404);
   });
 });

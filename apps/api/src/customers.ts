@@ -1,5 +1,5 @@
 import type { MiddlewareHandler } from "hono";
-import type { Db } from "@kovobot/db";
+import { type Db, transaction } from "@kovobot/db";
 import { botNotFound, UUID_PATTERN } from "./http.ts";
 
 export interface Customer {
@@ -61,6 +61,18 @@ export async function findOrCreateCustomerForGoogle(
     [google.email, google.subject],
   );
   return rows[0] ?? null;
+}
+
+/**
+ * Runs `work` in a transaction that holds the Bot's row, so writes that must stay within one of
+ * its limits (notes, schedules, Skills) take turns: the second waits for the first, then counts
+ * its row. It doesn't hold up writes that only point at the Bot, such as a new message.
+ */
+export function withBotHeld<T>(db: Db, botId: string, work: (client: Pick<Db, "query">) => Promise<T>): Promise<T> {
+  return transaction(db, async (client) => {
+    await client.query("SELECT 1 FROM bots WHERE id = $1 FOR NO KEY UPDATE", [botId]);
+    return work(client);
+  });
 }
 
 /** Whether the Bot with this id is the Customer's own. */

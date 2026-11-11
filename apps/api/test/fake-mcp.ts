@@ -1,7 +1,10 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { serve, type ServerType } from "@hono/node-server";
 import { Hono } from "hono";
+import { McpServer as SessionMcpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 
 /** The access token the fake's sign-in gives out, and wants on every MCP request when sign-in is on. */
@@ -123,6 +126,53 @@ export class FakeMcpServer {
       return c.json({ access_token: FAKE_MCP_ACCESS_TOKEN, token_type: "Bearer", expires_in: 3600, refresh_token: "fake-mcp-refresh-token" });
     });
 
+    this.server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" });
+    await new Promise((resolve) => this.server!.once("listening", resolve));
+    this.baseUrl = `http://127.0.0.1:${(this.server.address() as AddressInfo).port}`;
+  }
+
+  async stop(): Promise<void> {
+    await new Promise((resolve) => this.server?.close(resolve));
+  }
+}
+
+/**
+ * A 2025-era MCP server, as many still are: the 1.x SDK over streamable HTTP, keeping a session
+ * for each client (Mcp-Session-Id) instead of the stateless 2026-07-28 protocol. One tool that
+ * only reads. It answers anything but an initialize without a session as the 1.x SDK does.
+ */
+export class FakeSessionMcpServer {
+  baseUrl = "";
+  /** The sessions it started, by id. */
+  readonly sessions = new Map<string, WebStandardStreamableHTTPServerTransport>();
+  readonly calls: string[] = [];
+  private server: ServerType | undefined;
+
+  get url(): string {
+    return `${this.baseUrl}/mcp`;
+  }
+
+  async start(): Promise<void> {
+    const app = new Hono();
+    app.all("/mcp", async (c) => {
+      const session = this.sessions.get(c.req.header("mcp-session-id") ?? "");
+      if (session) return session.handleRequest(c.req.raw);
+      const body: unknown = c.req.method === "POST" ? await c.req.json().catch(() => null) : null;
+      if (!isInitializeRequest(body)) {
+        return c.json({ jsonrpc: "2.0", error: { code: -32000, message: "Bad Request: No valid session ID provided" }, id: null }, 400);
+      }
+      const transport: WebStandardStreamableHTTPServerTransport = new WebStandardStreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (id) => void this.sessions.set(id, transport),
+      });
+      const server = new SessionMcpServer({ name: "Corner shop", version: "1.0.0" });
+      server.registerTool("todays_specials", { description: "Lists today's specials.", annotations: { readOnlyHint: true } }, async () => {
+        this.calls.push("todays_specials");
+        return { content: [{ type: "text", text: "Rye loaf, half price." }] };
+      });
+      await server.connect(transport);
+      return transport.handleRequest(c.req.raw, { parsedBody: body });
+    });
     this.server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" });
     await new Promise((resolve) => this.server!.once("listening", resolve));
     this.baseUrl = `http://127.0.0.1:${(this.server.address() as AddressInfo).port}`;

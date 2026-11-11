@@ -46,6 +46,13 @@ export interface Config {
   anthropicWorkspaceId: string | null;
   /** Where the Bot service calls the Computer service. Null leaves Computers off. */
   computerService: ComputerServiceSettings | null;
+  /**
+   * The key an outside scheduler presents to POST /api/sweep, once a minute, to run the Bot
+   * service's sweeps (due schedules, idle Computers). Set, the service keeps no clock of its own:
+   * on Cloud Run an instance gets CPU only while it serves a request, so a timer can't be trusted.
+   * Null, the service sweeps on its own timers.
+   */
+  sweepKey: string | null;
 }
 
 /** How the Bot service reaches the Computer service, its only client (ADR 0001). */
@@ -247,7 +254,14 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
     localModelsUrl: null,
     anthropicWorkspaceId: read("ANTHROPIC_WORKSPACE_ID") ?? null,
     computerService: null,
+    sweepKey: null,
   };
+  const sweepKey = read("SWEEP_KEY");
+  if (sweepKey && sweepKey.length < MIN_SECRET_LENGTH) {
+    problems.push(`SWEEP_KEY must be at least ${MIN_SECRET_LENGTH} characters (openssl rand -base64 32).`);
+  } else if (sweepKey) {
+    config.sweepKey = sweepKey;
+  }
   if (config.anthropicWorkspaceId && !/^wrkspc_\w+$/.test(config.anthropicWorkspaceId)) {
     warnings.push("ANTHROPIC_WORKSPACE_ID doesn't look like a workspace id (wrkspc_...): Anthropic will refuse every call.");
   }
