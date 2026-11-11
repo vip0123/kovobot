@@ -36,3 +36,7 @@ export function sameOriginWrites(appUrl: string): MiddlewareHandler {
     await next();
   };
 }
+
+export function botNotFound(c: Context) {
+  return apiError(c, 404, "bot_not_found", "There's no such Bot.");
+}

@@ -1,4 +1,6 @@
+import type { MiddlewareHandler } from "hono";
 import type { Db } from "@kovobot/db";
+import { botNotFound, UUID_PATTERN } from "./http.ts";
 
 export interface Customer {
   id: string;
@@ -59,4 +61,24 @@ export async function findOrCreateCustomerForGoogle(
     [google.email, google.subject],
   );
   return rows[0] ?? null;
+}
+
+/** Whether the Bot with this id is the Customer's own. */
+export async function ownsBot(db: Db, customerId: string, botId: string): Promise<boolean> {
+  if (!UUID_PATTERN.test(botId)) return false;
+  const { rowCount } = await db.query("SELECT 1 FROM bots WHERE id = $1 AND customer_id = $2", [botId, customerId]);
+  return rowCount === 1;
+}
+
+/**
+ * For routes under /bots/:id: answers 404 unless that Bot is the signed-in Customer's own,
+ * and otherwise passes its id on as `botId`.
+ */
+export function ownBotOnly(db: Db): MiddlewareHandler<{ Variables: { customer: Customer; botId: string } }> {
+  return async (c, next) => {
+    const botId = c.req.param("id") ?? "";
+    if (!(await ownsBot(db, c.get("customer").id, botId))) return botNotFound(c);
+    c.set("botId", botId);
+    await next();
+  };
 }

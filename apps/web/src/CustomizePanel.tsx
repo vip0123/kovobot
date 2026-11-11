@@ -1,13 +1,35 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router";
-import { api, type Bot, errorMessage, type Skill } from "./api.ts";
+import { api, type Bot, errorMessage, type Note, type Skill } from "./api.ts";
 import { CloseIcon } from "./Icons.tsx";
 
 /** The most a Bot's instructions may hold, as the API allows. */
 const MAX_INSTRUCTIONS = 8_000;
 
-/** What a Customer customises about a Bot: its instructions and its Skills. */
-export function CustomizePanel({ bot, onBotChange, onClose }: { bot: Bot; onBotChange: (bot: Bot) => void; onClose: () => void }) {
+const TABS = [
+  { id: "instructions", label: "Instructions" },
+  { id: "skills", label: "Skills" },
+  { id: "memory", label: "Memory" },
+] as const;
+
+type Tab = (typeof TABS)[number]["id"];
+
+/**
+ * What a Customer customises about a Bot: its instructions, its Skills and its memory.
+ * `conversationLength` changes as the Bot replies, so its notes are read again.
+ */
+export function CustomizePanel({
+  bot,
+  conversationLength,
+  onBotChange,
+  onClose,
+}: {
+  bot: Bot;
+  conversationLength: number;
+  onBotChange: (bot: Bot) => void;
+  onClose: () => void;
+}) {
+  const [tab, setTab] = useState<Tab>("instructions");
   return (
     <section className="drawer-panel">
       <div className="drawer-head">
@@ -16,9 +38,171 @@ export function CustomizePanel({ bot, onBotChange, onClose }: { bot: Bot; onBotC
           <CloseIcon />
         </button>
       </div>
-      <InstructionsEditor bot={bot} onBotChange={onBotChange} />
-      <SkillGrants bot={bot} />
+      <div className="tabs" role="tablist" aria-label={`Customize ${bot.name}`}>
+        {TABS.map(({ id, label }) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            id={`customize-tab-${id}`}
+            aria-selected={tab === id}
+            aria-controls={`customize-panel-${id}`}
+            className={`tab${tab === id ? " active" : ""}`}
+            onClick={() => setTab(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div role="tabpanel" id={`customize-panel-${tab}`} aria-labelledby={`customize-tab-${tab}`}>
+        {tab === "instructions" && <InstructionsEditor bot={bot} onBotChange={onBotChange} />}
+        {tab === "skills" && <SkillGrants bot={bot} />}
+        {tab === "memory" && <Memory bot={bot} conversationLength={conversationLength} />}
+      </div>
     </section>
+  );
+}
+
+const MAX_NOTE = 500;
+const MAX_NOTES = 50;
+
+/** The Bot's notes: what it keeps in mind across Conversations. The Customer reads, adds, edits and deletes them. */
+function Memory({ bot, conversationLength }: { bot: Bot; conversationLength: number }) {
+  const [notes, setNotes] = useState<Note[] | null>(null);
+  const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState<{ id: string; content: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.notes(bot.id).then(
+      ({ notes }) => setNotes(notes),
+      (caught: unknown) => {
+        setNotes([]);
+        setError(errorMessage(caught));
+      },
+    );
+  }, [bot.id, conversationLength]);
+
+  async function run(action: () => Promise<void>) {
+    setError(null);
+    try {
+      await action();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  const add = (event: FormEvent) => {
+    event.preventDefault();
+    void run(async () => {
+      const { note } = await api.addNote(bot.id, draft);
+      setNotes((current) => [...(current ?? []), note]);
+      setDraft("");
+    });
+  };
+  const save = (event: FormEvent) => {
+    event.preventDefault();
+    if (!editing) return;
+    void run(async () => {
+      const { note } = await api.editNote(bot.id, editing.id, editing.content);
+      setNotes((current) => current?.map((each) => (each.id === note.id ? note : each)) ?? null);
+      setEditing(null);
+    });
+  };
+  const remove = (id: string) =>
+    run(async () => {
+      await api.deleteNote(bot.id, id);
+      setNotes((current) => current?.filter((each) => each.id !== id) ?? null);
+    });
+
+  return (
+    <div className="drawer-section memory">
+      <p className="muted small">
+        {bot.name} keeps notes of what's worth knowing next time, and reads them in every Conversation. They're yours to change.
+      </p>
+      {notes === null ? (
+        <p className="muted small">Loading…</p>
+      ) : (
+        <>
+          {notes.length === 0 && <p className="empty-list small">No notes yet. Tell {bot.name} something worth remembering, or add one here.</p>}
+          <ul className="notes">
+            {notes.map((note) =>
+              editing?.id === note.id ? (
+                <li key={note.id} className="note editing">
+                  <form onSubmit={save} className="stack">
+                    <label htmlFor={`note-${note.id}`} className="visually-hidden">
+                      Note
+                    </label>
+                    <textarea
+                      id={`note-${note.id}`}
+                      rows={3}
+                      required
+                      maxLength={MAX_NOTE}
+                      autoFocus
+                      value={editing.content}
+                      onChange={(event) => setEditing({ id: note.id, content: event.target.value })}
+                    />
+                    <div className="actions">
+                      <button type="submit" className="button primary small">
+                        Save
+                      </button>
+                      <button type="button" className="button secondary small" onClick={() => setEditing(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                </li>
+              ) : (
+                <li key={note.id} className={`note${note.afterOutsideContent ? " flagged" : ""}`}>
+                  <p className="note-text">{note.content}</p>
+                  {note.afterOutsideContent && (
+                    <p className="note-flag small">
+                      {bot.name} wrote this after reading web pages or using its Computer. Check it says what you want.
+                    </p>
+                  )}
+                  <div className="note-foot">
+                    <span className="muted small">{note.writtenBy === "bot" ? `By ${bot.name}` : "By you"}</span>
+                    <button type="button" className="button ghost small" onClick={() => setEditing({ id: note.id, content: note.content })}>
+                      Edit
+                    </button>
+                    <button type="button" className="button ghost small danger-text" onClick={() => void remove(note.id)}>
+                      Delete
+                    </button>
+                  </div>
+                </li>
+              ),
+            )}
+          </ul>
+          {notes.length < MAX_NOTES ? (
+            <form className="note-add" onSubmit={add}>
+              <label htmlFor="new-note" className="visually-hidden">
+                A new note
+              </label>
+              <input
+                id="new-note"
+                maxLength={MAX_NOTE}
+                placeholder="Add a note, such as: I'm vegetarian."
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+              />
+              <button type="submit" className="button secondary small" disabled={!draft.trim()}>
+                Add
+              </button>
+            </form>
+          ) : (
+            <p className="muted small">{bot.name} keeps up to {MAX_NOTES} notes. Delete one to add another.</p>
+          )}
+          <p className="muted small counter">
+            {notes.length} of {MAX_NOTES} notes
+          </p>
+        </>
+      )}
+      {error && (
+        <p className="alert" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -54,7 +238,7 @@ function SkillGrants({ bot }: { bot: Bot }) {
 
   return (
     <fieldset className="drawer-section skill-grants">
-      <legend>Skills</legend>
+      <legend className="visually-hidden">Skills</legend>
       <p className="muted small">
         {bot.name} sees each Skill's name and when to use it, and reads the whole Skill when it applies.
       </p>

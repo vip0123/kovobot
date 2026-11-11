@@ -1,8 +1,8 @@
 import { type Context, Hono } from "hono";
 import type { Db } from "@kovobot/db";
 import type { AppDeps } from "./app.ts";
-import type { Customer } from "./customers.ts";
-import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
+import { type Customer, ownsBot } from "./customers.ts";
+import { apiError, botNotFound, jsonBody, UUID_PATTERN } from "./http.ts";
 
 /** Instructions a Customer writes once for one kind of work, and grants to their Bots. */
 export interface Skill {
@@ -204,10 +204,9 @@ async function saved(c: Context<Env>, name: string | undefined, save: () => Prom
 async function refuseUnlessOwned(c: Context<Env>, db: Db): Promise<Response | null> {
   const customerId = c.get("customer").id;
   const [botId, skillId] = [c.req.param("id") ?? "", c.req.param("skillId") ?? ""];
-  const owns = async (table: "bots" | "skills", id: string) =>
-    UUID_PATTERN.test(id) && (await db.query(`SELECT 1 FROM ${table} WHERE id = $1 AND customer_id = $2`, [id, customerId])).rowCount === 1;
-  if (!(await owns("bots", botId))) return apiError(c, 404, "bot_not_found", "There's no such Bot.");
-  if (!(await owns("skills", skillId))) return skillNotFound(c);
+  if (!(await ownsBot(db, customerId, botId))) return botNotFound(c);
+  const ownsSkill = UUID_PATTERN.test(skillId) && (await db.query("SELECT 1 FROM skills WHERE id = $1 AND customer_id = $2", [skillId, customerId])).rowCount === 1;
+  if (!ownsSkill) return skillNotFound(c);
   return null;
 }
 

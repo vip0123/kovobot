@@ -182,6 +182,6 @@ describe("a Bot that can't drive a Computer", () => {
   test("isn't offered the Computer without a Driver model", async () => {
     const { browser, bot } = await botWithComputer(null);
     await serverSentEvents(await chat(browser, bot, "Hello"));
-    expect(server.openai.requests.at(-1)!.tools).toBeUndefined();
+    expect(server.openai.requests.at(-1)!.tools ?? []).not.toContainEqual(expect.objectContaining({ name: "use_computer" }));
   });
 });
