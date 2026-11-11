@@ -55,6 +55,7 @@ Each key you set switches that Model provider's models on, for every Bot on your
 - **Deep research** is web search in rounds: up to 24 model calls and 20 minutes for one report, so it costs more than a message. Between searches the Bot reads pages in full, fetched from your server, and only pages its searches found, links on pages it read, or addresses in the message.
 - **Attachments** (images, PDFs and text files people send with a message) are kept in your database with their message.
 - **Pictures** Bots make use OpenAI's image model (GPT Image 2.6 Flare) when `OPENAI_API_KEY` is set, else Google's (Nano Banana 2.1) with `GEMINI_API_KEY`, billed on your key whatever the Bot's chat model. A message makes at most four. They're kept in your database with the reply, like Attachments.
+- **Voice notes** are heard by OpenAI's transcription model (GPT Transcribe) when `OPENAI_API_KEY` is set, else Google's (Gemini 3.5 Transcribe), and replies are read aloud by Google's (Gemini 3.8 Flash TTS), which needs `GEMINI_API_KEY`. The browser asks for the microphone the first time. Recordings are kept with their message, up to 10 MB (about ten minutes) each.
 
 Every other setting is in [`.env.example`](.env.example), with a comment on what it does.
 

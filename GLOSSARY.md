@@ -142,6 +142,10 @@ _Avoid_: job, run, turn
 A Task a message asks for that searches the web and reads pages in full, in rounds, within a set number of model calls and minutes, then writes a report with its sources. The report is the reply, and is also kept as a Markdown file. It only reads.
 _Avoid_: research mode, agentic search
 
+**Voice note**:
+A message the Customer speaks instead of typing. A speech-to-text model hears it, what it heard is the message, and the recording is kept with it as an Attachment. Any reply can be read aloud.
+_Avoid_: audio message, dictation, voice message
+
 **Schedule**:
 A task a Bot does on its own at set times: once, every day, on weekdays, on chosen days of the week or once a month, on the clock of a time zone. The Customer sets one on the Bot's page, or asks the Bot to. Each firing is one Task, and its reply goes into the Bot's Conversation.
 _Avoid_: cron, job, automation, reminder (for the schedule itself)
