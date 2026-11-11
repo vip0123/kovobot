@@ -97,7 +97,7 @@ setup() {
   # Cloud Run reaches Cloud SQL through a Unix socket under /cloudsql.
   printf 'postgres://kovobot:%s@/kovobot?host=/cloudsql/%s' "$db_password" "$CLOUDSQL" |
     gcloud secrets create DATABASE_URL --data-file - --project "$PROJECT"
-  openssl rand -base64 32 | tr -d '\n' | gcloud secrets create SESSION_SECRET --data-file - --project "$PROJECT"
+  openssl rand -base64 32 | tr -d '\r\n' | gcloud secrets create SESSION_SECRET --data-file - --project "$PROJECT"
   store_secret SMTP_PASSWORD
   [[ -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]] && store_secret GOOGLE_OAUTH_CLIENT_SECRET
   echo "Set up. Next: deploy/staging.sh deploy"
@@ -111,11 +111,13 @@ sync_secret() {
   [[ "$current" == "${!name}" ]] || store_secret "$name"
 }
 
-# Makes a random secret the first time; later deploys use it as it is.
+# Makes a random secret the first time; later deploys use it as it is. Hex, and with no line
+# ending (openssl on Windows ends with \r\n), since it travels in a header: a stray \r or a
+# base64 = makes the key Cloud Scheduler sends differ from the one the service reads.
 generated_secret() {
   local name="$1"
   gcloud secrets describe "$name" --project "$PROJECT" >/dev/null 2>&1 && return 0
-  openssl rand -base64 32 | tr -d '\n' | gcloud secrets create "$name" --data-file - --project "$PROJECT"
+  openssl rand -hex 32 | tr -d '\r\n' | gcloud secrets create "$name" --data-file - --project "$PROJECT"
 }
 
 # Cloud Scheduler runs the service's sweeps (due schedules) once a minute. On Cloud Run the
@@ -123,7 +125,7 @@ generated_secret() {
 # The sweep answers once its firings are done, so the deadline is Cloud Scheduler's longest.
 sweep_job() {
   local url="$1" job="$SERVICE-sweep" key
-  key="$(gcloud secrets versions access latest --secret SWEEP_KEY --project "$PROJECT")"
+  key="$(gcloud secrets versions access latest --secret SWEEP_KEY --project "$PROJECT" | tr -d '\r\n')"
   local common=(--location "$REGION" --project "$PROJECT" --schedule "* * * * *" --time-zone Etc/UTC
     --uri "$url/api/sweep" --http-method POST --attempt-deadline 30m)
   if gcloud scheduler jobs describe "$job" --location "$REGION" --project "$PROJECT" >/dev/null 2>&1; then
