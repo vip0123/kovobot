@@ -23,6 +23,8 @@ export interface Reply {
   webSearch: boolean;
   /** The Customer's time zone, so the model knows their date and time; null when unknown. */
   timeZone: string | null;
+  /** A firing whose first Task a restart cut off: the model is told some of it may be done. */
+  restarted?: boolean;
 }
 
 /** What a reply reports as it runs. */
@@ -54,8 +56,11 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
     const newest = conversation.at(-1);
     if (newest && recent.at(-1)?.role === "user") {
       const when = reply.timeZone ? timeStamp(deps.now(), reply.timeZone) : null;
+      const again = reply.restarted
+        ? " Kovobot restarted while you were doing it before, so some of it may be done already: don't do anything twice."
+        : "";
       const header = recent.at(-1)!.scheduleId
-        ? `[A schedule the Customer set runs this now${when ? `, ${when}` : ""}. Do it, and reply with what you did or found.]`
+        ? `[A schedule the Customer set runs this now${when ? `, ${when}` : ""}.${again} Do it, and reply with what you did or found.]`
         : when && `[${when}]`;
       if (header) newest.content = `${header}\n${newest.content}`;
     }

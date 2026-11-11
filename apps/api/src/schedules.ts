@@ -1,7 +1,7 @@
 import { type Context, Hono } from "hono";
 import type { Db } from "@kovobot/db";
 import type { AppDeps } from "./app.ts";
-import { type Customer, ownBotOnly } from "./customers.ts";
+import { type Customer, ownBotOnly, withBotHeld } from "./customers.ts";
 import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
 
 /** When a schedule runs, on the wall clock of its time zone. */
@@ -157,11 +157,13 @@ async function addSchedule(
   const now = deps.now();
   const next = nextFiring(when, given.timeZone, now);
   if (next === null) return { error: "That time has already passed." };
-  const { rows } = await deps.db.query<Schedule>(
-    `INSERT INTO schedules (bot_id, task, rule, time_zone, next_run_at, created_by, created_at, updated_at)
-     SELECT $1, $2, $3, $4, $5, $6, $7, $7 WHERE (SELECT count(*) FROM schedules WHERE bot_id = $1) < $8
-     RETURNING ${SCHEDULE_COLUMNS}`,
-    [botId, task, JSON.stringify(when), given.timeZone, next, createdBy, now, MAX_SCHEDULES_PER_BOT],
+  const { rows } = await withBotHeld(deps.db, botId, (client) =>
+    client.query<Schedule>(
+      `INSERT INTO schedules (bot_id, task, rule, time_zone, next_run_at, created_by, created_at, updated_at)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $7 WHERE (SELECT count(*) FROM schedules WHERE bot_id = $1) < $8
+       RETURNING ${SCHEDULE_COLUMNS}`,
+      [botId, task, JSON.stringify(when), given.timeZone, next, createdBy, now, MAX_SCHEDULES_PER_BOT],
+    ),
   );
   if (!rows[0]) return { error: `A Bot can have up to ${MAX_SCHEDULES_PER_BOT} schedules. Delete one first.`, full: true };
   return { schedule: rows[0] };

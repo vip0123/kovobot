@@ -36,18 +36,22 @@ const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
 });
 // A Computer's live view arrives as a WebSocket, which Hono's handlers don't take.
 server.on("upgrade", liveViewUpgrade(app, deps));
-// Schedules that are due run, one sweep at a time: a sweep still running when the next is due skips it.
-let firing = false;
-setInterval(() => {
-  if (firing) return;
-  firing = true;
-  void fireDueSchedules(deps)
-    .catch((error: unknown) => console.error(error))
-    .finally(() => (firing = false));
-}, FIRING_SWEEP_MS).unref();
-// Computers with nothing going on go Asleep, and are Shut down after 30 days Asleep.
-if (deps.computers) {
-  setInterval(() => void sleepIdleComputers(deps).catch((error: unknown) => console.error(error)), SLEEP_SWEEP_MS).unref();
+// With SWEEP_KEY set, an outside scheduler runs the sweeps (POST /api/sweep), and this service
+// keeps no clock: on Cloud Run a timer gets CPU only while some request happens to be open.
+if (!config.sweepKey) {
+  // Schedules that are due run, one sweep at a time: a sweep still running when the next is due skips it.
+  let firing = false;
+  setInterval(() => {
+    if (firing) return;
+    firing = true;
+    void fireDueSchedules(deps)
+      .catch((error: unknown) => console.error(error))
+      .finally(() => (firing = false));
+  }, FIRING_SWEEP_MS).unref();
+  // Computers with nothing going on go Asleep, and are Shut down after 30 days Asleep.
+  if (deps.computers) {
+    setInterval(() => void sleepIdleComputers(deps).catch((error: unknown) => console.error(error)), SLEEP_SWEEP_MS).unref();
+  }
 }
 
 // Cloud Run sends SIGTERM before stopping an instance: finish open requests, then close the pool.

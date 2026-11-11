@@ -227,3 +227,16 @@ describe("Computers", () => {
     ]);
   });
 });
+
+describe("the sweeps", () => {
+  const key = "s".repeat(32);
+
+  test("run on the Bot service's own clock, unless SWEEP_KEY hands them to an outside scheduler", () => {
+    expect(loadConfig({}).config.sweepKey).toBeNull();
+    expect(loadConfig({ ...hostedEnv, SWEEP_KEY: key }).config.sweepKey).toBe(key);
+  });
+
+  test("a short sweep key is refused", () => {
+    expect(configProblems({ SWEEP_KEY: "short" })).toEqual([expect.stringMatching(/^SWEEP_KEY must be at least 32 characters/)]);
+  });
+});

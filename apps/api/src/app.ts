@@ -10,6 +10,7 @@ import { apiError, sameOriginWrites } from "./http.ts";
 import { leadRoutes } from "./leads.ts";
 import type { Mailer } from "./mailer.ts";
 import type { ModelAdapters } from "./models/adapter.ts";
+import { sweepRoutes } from "./sweeps.ts";
 
 /** Everything the API talks to outside its own code. Tests swap the edges. */
 export interface AppDeps {
@@ -30,6 +31,8 @@ export function createApp(deps: AppDeps) {
   app.get("/api/healthz", (c) => c.text("ok"));
   // Leads come from the landing page's own origin, so they come before the same-origin check.
   app.route("/api", leadRoutes(deps));
+  // So does an outside scheduler's tick, which comes from no website at all.
+  app.route("/api", sweepRoutes(deps));
   app.use("/api/*", sameOriginWrites(deps.config.appUrl));
   app.route("/api", authRoutes(deps));
   app.route("/api", botRoutes(deps));

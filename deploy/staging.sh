@@ -70,7 +70,7 @@ grant() {
 
 setup() {
   gcloud services enable run.googleapis.com sqladmin.googleapis.com artifactregistry.googleapis.com \
-    cloudbuild.googleapis.com secretmanager.googleapis.com --project "$PROJECT"
+    cloudbuild.googleapis.com secretmanager.googleapis.com cloudscheduler.googleapis.com --project "$PROJECT"
 
   gcloud artifacts repositories create kovobot --repository-format docker --location "$REGION" --project "$PROJECT"
 
@@ -94,7 +94,7 @@ setup() {
   # Cloud Run reaches Cloud SQL through a Unix socket under /cloudsql.
   printf 'postgres://kovobot:%s@/kovobot?host=/cloudsql/%s' "$db_password" "$CLOUDSQL" |
     gcloud secrets create DATABASE_URL --data-file - --project "$PROJECT"
-  openssl rand -base64 32 | tr -d '\n' | gcloud secrets create SESSION_SECRET --data-file - --project "$PROJECT"
+  openssl rand -base64 32 | tr -d '\r\n' | gcloud secrets create SESSION_SECRET --data-file - --project "$PROJECT"
   store_secret SMTP_PASSWORD
   [[ -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]] && store_secret GOOGLE_OAUTH_CLIENT_SECRET
   echo "Set up. Next: deploy/staging.sh deploy"
@@ -106,6 +106,31 @@ sync_secret() {
   [[ -n "${!name:-}" ]] || return 0
   current="$(gcloud secrets versions access latest --secret "$name" --project "$PROJECT" 2>/dev/null || true)"
   [[ "$current" == "${!name}" ]] || store_secret "$name"
+}
+
+# Makes a random secret the first time; later deploys use it as it is. Hex, and with no line
+# ending (openssl on Windows ends with \r\n), since it travels in a header: a stray \r or a
+# base64 = makes the key Cloud Scheduler sends differ from the one the service reads.
+generated_secret() {
+  local name="$1"
+  gcloud secrets describe "$name" --project "$PROJECT" >/dev/null 2>&1 && return 0
+  openssl rand -hex 32 | tr -d '\r\n' | gcloud secrets create "$name" --data-file - --project "$PROJECT"
+}
+
+# Cloud Scheduler runs the service's sweeps (due schedules) once a minute. On Cloud Run the
+# service has CPU only while a request is open, so it keeps no clock of its own (SWEEP_KEY).
+# The sweep answers once its firings are done, so the deadline is Cloud Scheduler's longest.
+sweep_job() {
+  local url="$1" job="$SERVICE-sweep" key
+  key="$(gcloud secrets versions access latest --secret SWEEP_KEY --project "$PROJECT" | tr -d '\r\n')"
+  local common=(--location "$REGION" --project "$PROJECT" --schedule "* * * * *" --time-zone Etc/UTC
+    --uri "$url/api/sweep" --http-method POST --attempt-deadline 30m)
+  if gcloud scheduler jobs describe "$job" --location "$REGION" --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "$job" "${common[@]}" --update-headers "x-sweep-key=$key" >/dev/null
+  else
+    gcloud scheduler jobs create http "$job" "${common[@]}" --headers "x-sweep-key=$key" >/dev/null
+  fi
+  echo "Cloud Scheduler sweeps $url once a minute ($job)."
 }
 
 # Copies a secret from the environment (.env) into Secret Manager, or adds a new version of it.
@@ -138,6 +163,10 @@ deploy() {
   fi
   # The SMTP password follows .env, so fixing it there and deploying is enough.
   sync_secret SMTP_PASSWORD
+  # The key Cloud Scheduler's ticks carry; made once.
+  gcloud services enable cloudscheduler.googleapis.com --project "$PROJECT"
+  generated_secret SWEEP_KEY
+  secrets="$secrets,SWEEP_KEY=SWEEP_KEY:latest"
 
   # Each Model provider key set in .env goes to Secret Manager (a new version only
   # when it changed) and to the service; Bots can use that Model provider's models.
@@ -157,10 +186,13 @@ deploy() {
     --set-cloudsql-instances "$CLOUDSQL" --set-env-vars "$env_vars" --set-secrets "$secrets"
   gcloud run jobs execute "$SERVICE-command" --region "$REGION" --project "$PROJECT" --wait
 
+  # A reply streams for as long as its Task runs, a Computer take-over included, and so does a
+  # sweep: an hour, Cloud Run's longest, rather than its default five minutes.
   gcloud run deploy "$SERVICE" --image "$image" --region "$REGION" --project "$PROJECT" \
     --service-account "$SERVICE_ACCOUNT" --add-cloudsql-instances "$CLOUDSQL" \
-    --set-env-vars "$env_vars" --set-secrets "$secrets" --allow-unauthenticated
+    --set-env-vars "$env_vars" --set-secrets "$secrets" --allow-unauthenticated --timeout 3600
 
+  sweep_job "$url"
   echo "Staging is live at $url"
 }
 
