@@ -897,30 +897,6 @@ function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
           ))}
         </ul>
       )}
-      {preApprovals.length > 0 && (
-        <>
-          <h3 className="drawer-subhead">Pre-approved</h3>
-          <p className="muted small">
-            {bot.name} uses these without asking, until a Task reads outside content. Paying always asks.
-          </p>
-          <ul className="notes">
-            {preApprovals.map((preApproval) => (
-              <li key={preApproval.id} className="note">
-                <p className="note-text">
-                  {preApproval.tool.label} · <code>{preApproval.tool.name}</code>{" "}
-                  <span className="muted small">{PRE_APPROVED_KINDS[preApproval.kind]}</span>
-                </p>
-                <div className="note-foot">
-                  <span />
-                  <button type="button" className="button ghost small danger-text" onClick={() => void removePreApproval(preApproval)}>
-                    Remove
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
       {localServers.length > 0 && (
         <form className="note-add" onSubmit={addLocal}>
           <label htmlFor="mcp-local" className="visually-hidden">
@@ -955,6 +931,30 @@ function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
           {connecting ? "Connecting…" : "Connect"}
         </button>
       </form>
+      {preApprovals.length > 0 && (
+        <>
+          <h3 className="drawer-subhead">Pre-approved</h3>
+          <p className="muted small">
+            {bot.name} uses these without asking, until a Task reads outside content. Paying always asks.
+          </p>
+          <ul className="notes">
+            {preApprovals.map((preApproval) => (
+              <li key={preApproval.id} className="note">
+                <p className="note-text">
+                  {preApproval.tool.label} · <code>{preApproval.tool.name}</code>{" "}
+                  <span className="muted small">{PRE_APPROVED_KINDS[preApproval.kind]}</span>
+                </p>
+                <div className="note-foot">
+                  <span />
+                  <button type="button" className="button ghost small danger-text" onClick={() => void removePreApproval(preApproval)}>
+                    Remove
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       {error && (
         <p className="alert" role="alert">
           {error}

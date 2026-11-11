@@ -47,7 +47,10 @@ function ConnectedApps() {
         // The most used apps, until the Customer searches.
         api.appCatalog("").then(
           ({ toolkits }) => setToolkits(toolkits),
-          () => setToolkits([]),
+          (caught: unknown) => {
+            setToolkits([]);
+            setError(errorMessage(caught));
+          },
         );
       },
       (caught: unknown) => {
