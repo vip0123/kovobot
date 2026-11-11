@@ -525,6 +525,32 @@ select:disabled {
   background: var(--hover);
 }
 
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.sidebar-link svg {
+  color: var(--muted);
+}
+
+.sidebar-link:hover {
+  background: var(--hover);
+}
+
+.sidebar-link.active {
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
 .sidebar-bot.active {
   background: var(--surface);
   box-shadow: 0 0 0 1px var(--border);
@@ -753,6 +779,160 @@ select:disabled {
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Skills: the Customer's library, and one Skill's editor */
+.skills {
+  max-width: 820px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.skills-intro {
+  margin: 0;
+  max-width: 640px;
+}
+
+.skills-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 48px 24px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 16px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.skills-empty h2 {
+  margin: 8px 0 0;
+  color: var(--text);
+  font-size: 1.125rem;
+}
+
+.skills-empty p {
+  max-width: 420px;
+  margin: 0;
+}
+
+.skill-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.skill-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+
+.skill-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+
+.skill-card-name {
+  font-weight: 650;
+}
+
+.skill-card-description {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.9rem;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.crumb {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.crumb:hover {
+  color: var(--text);
+}
+
+.crumb-sep {
+  margin: 0 8px;
+  color: var(--faint);
+}
+
+.skill-form {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.skill-form p {
+  margin: 0;
+}
+
+.skill-bots {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  gap: 4px;
+}
+
+.skill-bots legend,
+.drawer-section legend {
+  margin-bottom: 6px;
+  padding: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.check-row:hover {
+  background: var(--hover);
+}
+
+.check-row input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.skill-delete {
+  margin-left: auto;
+}
+
+.skill-delete-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
 }
 
 /* A Bot's page: its header, Conversation and Computer */
@@ -1800,4 +1980,30 @@ select:disabled {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* A Bot's Skills, in its Customize panel */
+.skill-grants {
+  margin: 0;
+  padding: 18px 0 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.skill-grant {
+  align-items: flex-start;
+}
+
+.skill-grant input {
+  margin-top: 3px;
+}
+
+.skill-grant-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.skill-grant-name {
+  font-weight: 600;
 }

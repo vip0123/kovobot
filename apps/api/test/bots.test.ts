@@ -654,8 +654,9 @@ describe("attachments", () => {
       message: { id: sent!.id, attachments: [{ id: sent!.attachments[0]!.id }, {}, {}] },
     });
   });
-
-  test("the model sees files newest first within the budget; anything older than the first that doesn't fit is named", async () => {
+  // It sends three 4.5 MB images, each of them on to the model again, so it gets more time than most.
+  // It sends some 20 MB of files in all, so it gets more time than most.
+  test("the model sees files newest first within the budget; anything older than the first that doesn't fit is named", { timeout: 15_000 }, async () => {
     const browser = await signedInBrowser();
     const bot = await createBot(browser);
     const image = (megabytes: number) =>

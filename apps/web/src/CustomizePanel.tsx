@@ -1,11 +1,12 @@
-import { type FormEvent, useState } from "react";
-import { api, type Bot, errorMessage } from "./api.ts";
+import { type FormEvent, useEffect, useState } from "react";
+import { Link } from "react-router";
+import { api, type Bot, errorMessage, type Skill } from "./api.ts";
 import { CloseIcon } from "./Icons.tsx";
 
 /** The most a Bot's instructions may hold, as the API allows. */
 const MAX_INSTRUCTIONS = 8_000;
 
-/** What a Customer customises about a Bot: for now, its instructions. */
+/** What a Customer customises about a Bot: its instructions and its Skills. */
 export function CustomizePanel({ bot, onBotChange, onClose }: { bot: Bot; onBotChange: (bot: Bot) => void; onClose: () => void }) {
   return (
     <section className="drawer-panel">
@@ -16,7 +17,80 @@ export function CustomizePanel({ bot, onBotChange, onClose }: { bot: Bot; onBotC
         </button>
       </div>
       <InstructionsEditor bot={bot} onBotChange={onBotChange} />
+      <SkillGrants bot={bot} />
     </section>
+  );
+}
+
+/** Which of the Customer's Skills this Bot has; each switch gives or takes one at once. */
+function SkillGrants({ bot }: { bot: Bot }) {
+  const [skills, setSkills] = useState<Skill[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.skills().then(
+      ({ skills }) => setSkills(skills),
+      (caught: unknown) => {
+        setSkills([]);
+        setError(errorMessage(caught));
+      },
+    );
+  }, []);
+
+  async function toggle(skill: Skill, give: boolean) {
+    setBusy(skill.id);
+    setError(null);
+    try {
+      await (give ? api.grantSkill(bot.id, skill.id) : api.revokeSkill(bot.id, skill.id));
+      const botIds = give ? [...skill.botIds, bot.id] : skill.botIds.filter((id) => id !== bot.id);
+      setSkills((current) => current?.map((each) => (each.id === skill.id ? { ...each, botIds } : each)) ?? null);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <fieldset className="drawer-section skill-grants">
+      <legend>Skills</legend>
+      <p className="muted small">
+        {bot.name} sees each Skill's name and when to use it, and reads the whole Skill when it applies.
+      </p>
+      {skills === null ? (
+        <p className="muted small">Loading…</p>
+      ) : skills.length === 0 ? (
+        <p className="small">
+          You have no Skills yet. <Link to="/skills/new">Write one</Link> or <Link to="/skills">import a SKILL.md file</Link>.
+        </p>
+      ) : (
+        <>
+          {skills.map((skill) => (
+            <label key={skill.id} className="check-row skill-grant">
+              <input
+                type="checkbox"
+                checked={skill.botIds.includes(bot.id)}
+                disabled={busy === skill.id}
+                onChange={(event) => void toggle(skill, event.target.checked)}
+              />
+              <span className="skill-grant-text">
+                <span className="skill-grant-name">{skill.name}</span>
+                <span className="muted small">{skill.description}</span>
+              </span>
+            </label>
+          ))}
+          <Link to="/skills" className="small">
+            Manage your Skills
+          </Link>
+        </>
+      )}
+      {error && (
+        <p className="alert" role="alert">
+          {error}
+        </p>
+      )}
+    </fieldset>
   );
 }
 

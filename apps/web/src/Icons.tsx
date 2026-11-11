@@ -135,3 +135,16 @@ export const SlidersIcon = (props: IconProps) => (
     <circle cx="18" cy="18" r="2" />
   </Icon>
 );
+
+export const BookIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5z" />
+    <path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19v-3M9 7h6" />
+  </Icon>
+);
+
+export const UploadIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M12 15V4M7 9l5-5 5 5M5 20h14" />
+  </Icon>
+);

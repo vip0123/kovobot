@@ -110,6 +110,10 @@ _Avoid_: agent, assistant
 What a Customer tells a Bot about how to work for them: who it works for, how it answers, what to always or never do. The Bot gets them with every Task, and they win over our defaults.
 _Avoid_: system prompt, persona, custom instructions
 
+**Skill**:
+Instructions a Customer writes once for one kind of work, such as a weekly report, and gives to any of their Bots. A Bot sees each of its Skills' names and when to use them, and reads a Skill in full when it applies.
+_Avoid_: plugin, prompt, template, GPT
+
 **Bot service**:
 Our main service: the website, the API, the agent loop, Channels, model adapters and MCP. It runs every Customer's Bots.
 _Avoid_: the Bot (meaning the software), backend, core
