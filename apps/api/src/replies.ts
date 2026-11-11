@@ -6,6 +6,7 @@ import { driveComputer, drivingFor } from "./driver.ts";
 import { type ModelAdapter, ModelError, type ModelProvider, type ThinkingEffort, uniquePages, type WebSource } from "./models/adapter.ts";
 import type { ModelInfo } from "./models/catalog.ts";
 import { botNotes, notebook } from "./notes.ts";
+import { mcpTools } from "./mcp.ts";
 import { scheduleBook, timeStamp } from "./schedules.ts";
 import { botSkills, skillInstructions } from "./skills.ts";
 
@@ -65,6 +66,7 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
       ...(skills.length > 0 ? { skills: { list: skills, read: (name: string) => skillInstructions(deps.db, bot.id, name) } } : {}),
       notes: { list: await botNotes(deps.db, bot.id), book: notebook(deps.db, bot.id, deps.now) },
       schedules: scheduleBook(deps, bot.id, reply.timeZone ?? "UTC"),
+      connected: await mcpTools(deps, bot.id, bot.name),
     };
     const task = {
       botName: bot.name,

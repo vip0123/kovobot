@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { api, ApiError, type Bot, type Computer, errorMessage, type Message, type ModelCatalog } from "../api.ts";
 import { AppShell, PageHeader, useShell } from "../AppShell.tsx";
 import { BotAvatar } from "../BotAvatar.tsx";
@@ -28,6 +28,12 @@ function BotRoute() {
 /** undefined while loading, "off" where no Computer service is set up, null for none yet. */
 type ComputerState = Computer | null | "off" | undefined;
 
+/** What the Tools tab says on coming back from an MCP server's sign-in. */
+const MCP_OUTCOMES: Record<string, string> = {
+  connected: "Signed in. The server's tools are ready.",
+  failed: "Signing in to that MCP server didn't work. Try connecting it again.",
+};
+
 /** What the panel beside the Conversation shows, when open. */
 type Drawer = "computer" | "customize";
 
@@ -46,7 +52,13 @@ function BotChat({ id }: { id: string }) {
   const updateMessages = useCallback((update: (messages: Message[]) => Message[]) => setMessages((current) => update(current ?? [])), []);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [computer, setComputer] = useState<ComputerState>(undefined);
-  const [drawer, setDrawer] = useState<Drawer | null>(null);
+  // Back from signing in to an MCP server: the Tools tab says how it went.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [mcpNotice] = useState(() => MCP_OUTCOMES[searchParams.get("mcp") ?? ""] ?? null);
+  const [drawer, setDrawer] = useState<Drawer | null>(mcpNotice ? "customize" : null);
+  useEffect(() => {
+    if (searchParams.has("mcp")) setSearchParams({}, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     if (!exists) return;
@@ -119,6 +131,8 @@ function BotChat({ id }: { id: string }) {
               conversationLength={messages?.length ?? 0}
               onBotChange={saveBot}
               onClose={() => setDrawer(null)}
+              openOn={mcpNotice ? "tools" : undefined}
+              notice={mcpNotice ?? undefined}
             />
           </aside>
         )}
