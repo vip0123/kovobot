@@ -219,6 +219,11 @@ export function botRoutes(deps: AppDeps) {
       let thinking = "";
       // A Task may search in more than one model call: every page once.
       const cited: { sources: WebSource[]; searchSuggestions?: string } = { sources: [] };
+      // The reply holds the conversation for as long as it runs, however long that is.
+      const renewing = setInterval(
+        () => void renewReplying(deps.db, conversationId, deps.now()).catch((error: unknown) => console.error(error)),
+        RENEW_REPLY_CLAIM_MS,
+      );
       try {
         const driving = await drivingFor(deps, bot.id);
         const tools = driving ? { useComputer: (task: string) => driveComputer(deps, driving, task) } : undefined;
@@ -265,6 +270,7 @@ export function botRoutes(deps: AppDeps) {
             : { code: "model_failed", message: "The model didn't answer. Try again in a moment." },
         );
       } finally {
+        clearInterval(renewing);
         await stopReplying(deps.db, conversationId);
       }
     });
@@ -425,6 +431,12 @@ async function recentMessages(db: Db, conversationId: string): Promise<Message[]
   return rows;
 }
 
+/**
+ * How often a reply in progress renews its claim on the conversation. A claim not renewed for
+ * 5 minutes is one whose server stopped mid-reply, and the next message may take it over.
+ */
+const RENEW_REPLY_CLAIM_MS = 60_000;
+
 /** Claims the conversation for one reply. False while another reply is under way. */
 async function startReplying(db: Db, conversationId: string, now: Date): Promise<boolean> {
   const { rowCount } = await db.query(
@@ -433,6 +445,11 @@ async function startReplying(db: Db, conversationId: string, now: Date): Promise
     [conversationId, now],
   );
   return rowCount === 1;
+}
+
+/** Renews a reply's claim, which it holds until it stops. */
+async function renewReplying(db: Db, conversationId: string, now: Date): Promise<void> {
+  await db.query("UPDATE conversations SET replying_since = $2 WHERE id = $1 AND replying_since IS NOT NULL", [conversationId, now]);
 }
 
 async function stopReplying(db: Db, conversationId: string): Promise<void> {
