@@ -76,6 +76,8 @@ export function createComposioClient(options: { apiKey: string; baseUrl?: string
     });
     const text = await response.text();
     if (response.status === 404) return null;
+    // A refused key: Composio's own words would echo a piece of the key, so they're dropped.
+    if (response.status === 401 || response.status === 403) throw new ComposioError(response.status, "Composio refused the key.");
     if (!response.ok) {
       let message = `Composio answered ${response.status}.`;
       try {
@@ -244,6 +246,12 @@ export function appRoutes(deps: AppDeps) {
     );
   const failed = (c: Parameters<typeof apiError>[0], error: unknown) => {
     if (!(error instanceof ComposioError)) throw error;
+    // Hosted, the key is ours, so the Customer just hears it's unavailable; self-hosted, it's the Operator's to fix.
+    if (error.status === 401 || error.status === 403) {
+      return deps.config.mode === "hosted"
+        ? apiError(c, 503, "composio_refused_key", "Connected apps aren't available right now. Try again later.")
+        : apiError(c, 503, "composio_refused_key", "Composio refused this Kovobot's key: whoever runs it needs to fix COMPOSIO_API_KEY.");
+    }
     return apiError(c, 503, "composio_failed", `Composio didn't manage that: ${error.message}`);
   };
 

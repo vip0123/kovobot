@@ -83,6 +83,8 @@ export class FakeComposio {
   readonly executed: Array<{ tool: string; userId: string; accountId: string | null; arguments: unknown }> = [];
   /** Set, the next sign-in fails at the app. */
   failNextSignIn = false;
+  /** Set, every request is refused as Composio refuses a bad key: echoing a piece of it. */
+  refuseKey = false;
   private readonly authConfigs = new Map<string, string>();
   private server: ServerType | undefined;
 
@@ -106,7 +108,8 @@ export class FakeComposio {
     });
 
     app.use("/api/v3.1/*", async (c, next) => {
-      if (c.req.header("x-api-key") !== FAKE_COMPOSIO_KEY) return fail(401, "Invalid API key");
+      const key = c.req.header("x-api-key") ?? "";
+      if (this.refuseKey || key !== FAKE_COMPOSIO_KEY) return fail(401, `Invalid API key: ${key.slice(0, 3)}**${key.slice(-4)}`);
       await next();
     });
 
