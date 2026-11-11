@@ -153,6 +153,8 @@ export interface Attachment {
   mediaType: string;
   size: number;
   preview?: string;
+  /** On a picture the Bot made: the description it made it from. */
+  prompt?: string;
 }
 
 /** A file to send with a message: its name and its contents, base64. */
@@ -180,6 +182,8 @@ export interface ReplyHandlers {
   onSources?: (sources: WebSource[], searchSuggestions?: string) => void;
   /** An action the Bot asked to take, or news of one: waiting, running, done. */
   onApproval?: (approval: Approval) => void;
+  /** A picture the Bot just made, base64, shown until the reply is saved with it. */
+  onImage?: (image: { name: string; mediaType: string; prompt: string; data: string }) => void;
 }
 
 /** Instructions a Customer writes once for one kind of work, and gives to their Bots. */
@@ -387,7 +391,7 @@ export const api = {
 
 /** Reads a streamed reply's events into `handlers`, resolving with the saved reply. */
 async function readReply(response: Response, handlers: ReplyHandlers): Promise<Message> {
-  const { onSent = () => {}, onText, onStatus = () => {}, onThinking = () => {}, onSources = () => {}, onApproval = () => {} } = handlers;
+  const { onSent = () => {}, onText, onStatus = () => {}, onThinking = () => {}, onSources = () => {}, onApproval = () => {}, onImage = () => {} } = handlers;
   const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = "";
   for (;;) {
@@ -403,6 +407,7 @@ async function readReply(response: Response, handlers: ReplyHandlers): Promise<M
       if (event.name === "status") onStatus((event.data as { text: string }).text);
       if (event.name === "thinking") onThinking((event.data as { text: string }).text);
       if (event.name === "approval") onApproval((event.data as { approval: Approval }).approval);
+      if (event.name === "image") onImage((event.data as { image: Parameters<typeof onImage>[0] }).image);
       if (event.name === "sources") {
         const found = event.data as { sources: WebSource[]; searchSuggestions?: string };
         onSources(found.sources, found.searchSuggestions);

@@ -19,6 +19,8 @@ import { FakeComputerService } from "./fake-computer-service.ts";
 import { FakeAnthropic, FakeChatCompletions } from "./fake-models.ts";
 import { FAKE_OPENAI_KEY, FakeOpenAI } from "./fake-openai.ts";
 import { FakeWeb } from "./fake-web.ts";
+import { FAKE_GEMINI_KEY, FakeGeminiInteractions } from "./fake-gemini-interactions.ts";
+import { createGoogleImageMaker, createOpenAIImageMaker } from "../src/media/images.ts";
 
 /**
  * The API wired to the real, migrated test database. Only the edges are fake:
@@ -29,7 +31,15 @@ import { FakeWeb } from "./fake-web.ts";
  */
 export function startTestServer(
   env: Env = {},
-  options: { openai?: boolean; openrouter?: boolean; local?: boolean; computers?: boolean; composio?: boolean } = {},
+  options: {
+    openai?: boolean;
+    openrouter?: boolean;
+    local?: boolean;
+    computers?: boolean;
+    composio?: boolean;
+    /** Which Model provider's image model Bots make pictures with, or none: OpenAI's unless set. */
+    images?: "openai" | "google" | false;
+  } = {},
 ) {
   const db = createDb(inject("databaseUrl"));
   afterAll(() => db.end());
@@ -59,10 +69,12 @@ export function startTestServer(
   const openai = new FakeOpenAI();
   const anthropic = new FakeAnthropic();
   const chatCompletions = new FakeChatCompletions();
-  // The web pages a researching Bot reads.
+  // The web pages a researching Bot reads, and Google's media models.
   const web = new FakeWeb();
-  beforeAll(() => Promise.all([openai.start(), anthropic.start(), chatCompletions.start("/v1"), web.start()]));
-  afterAll(() => Promise.all([openai.stop(), anthropic.stop(), chatCompletions.stop(), web.stop()]));
+  const geminiMedia = new FakeGeminiInteractions();
+  beforeAll(() => Promise.all([openai.start(), anthropic.start(), chatCompletions.start("/v1"), web.start(), geminiMedia.start()]));
+  afterAll(() => Promise.all([openai.stop(), anthropic.stop(), chatCompletions.stop(), web.stop(), geminiMedia.stop()]));
+  const images = options.images ?? "openai";
   // A fake's address is known only once it listens, so each adapter is made on first use.
   const lazy = (make: () => ModelAdapter): ModelAdapter => {
     let adapter: ModelAdapter | undefined;
@@ -120,6 +132,12 @@ export function startTestServer(
       ? lazily(() => createComputerServiceClient({ url: computerService.baseUrl, apiKey: computerService.apiKey }))
       : null,
     composio: options.composio ? lazily(() => createComposioClient({ apiKey: FAKE_COMPOSIO_KEY, baseUrl: composio.apiUrl })) : null,
+    images:
+      images === "openai"
+        ? lazily(() => createOpenAIImageMaker({ apiKey: FAKE_OPENAI_KEY, baseURL: openai.baseUrl }))
+        : images === "google"
+          ? lazily(() => createGoogleImageMaker({ apiKey: FAKE_GEMINI_KEY, baseURL: geminiMedia.baseUrl }))
+          : null,
     now: () => clock.now,
   };
   const app = createApp(deps);
@@ -137,6 +155,8 @@ export function startTestServer(
     chatCompletions,
     /** The web pages a Bot reads. */
     web,
+    /** Google's Interactions API, for its image model when `images` is "google". */
+    geminiMedia,
     computerService,
     /** The stand-in for Composio, when `composio` is on. */
     composio,

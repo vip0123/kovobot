@@ -64,10 +64,12 @@ interface StreamingReply {
   searchSuggestions?: string;
   /** The Approvals this reply's Task asked for, which show under it once it's saved. */
   asked: Set<string>;
+  /** The pictures the Bot made so far, shown from their own data until the reply is saved. */
+  pictures: Attachment[];
 }
 
 function newReply(): StreamingReply {
-  return { text: "", thinking: "", sources: [], asked: new Set() };
+  return { text: "", thinking: "", sources: [], asked: new Set(), pictures: [] };
 }
 
 /** An id for a message shown before it's saved, which the saved one's numeric id never matches. */
@@ -116,9 +118,13 @@ export function Conversation({
   const [research, setResearch] = useState(false);
   const [dragging, setDragging] = useState(false);
   // The reply being written: its text, what the model thinks first, and the pages it found.
-  const [streaming, setStreaming] = useState<{ text: string; thinking: string; sources: WebSource[]; searchSuggestions?: string } | null>(
-    null,
-  );
+  const [streaming, setStreaming] = useState<{
+    text: string;
+    thinking: string;
+    sources: WebSource[];
+    searchSuggestions?: string;
+    pictures: Attachment[];
+  } | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -309,6 +315,11 @@ export function Conversation({
         setStreaming({ ...reply });
       },
       onStatus: setStatus,
+      onImage: ({ name, mediaType, prompt, data }) => {
+        const size = Math.floor((data.length * 3) / 4);
+        reply.pictures = [...reply.pictures, { name, mediaType, prompt, size, preview: `data:${mediaType};base64,${data}` }];
+        setStreaming({ ...reply });
+      },
       // An action the Bot asks to take shows as it asks; news of one updates its card.
       onApproval: (approval) => {
         if (approval.messageId === null) reply.asked.add(approval.id);
@@ -329,7 +340,7 @@ export function Conversation({
 
   /** The Bot service keeps what the model already wrote when a reply stops early, so the page keeps it too. */
   function keepPartial(reply: StreamingReply) {
-    if (!reply.text) return;
+    if (!reply.text && reply.pictures.length === 0) return;
     onMessages((current) => [
       ...current,
       {
@@ -339,6 +350,7 @@ export function Conversation({
         thinking: reply.thinking || null,
         sources: reply.sources,
         searchSuggestions: reply.searchSuggestions ?? null,
+        attachments: reply.pictures,
         createdAt: new Date().toISOString(),
       },
     ]);
@@ -416,6 +428,7 @@ export function Conversation({
               thinking={streaming.thinking}
               sources={streaming.sources}
               searchSuggestions={streaming.searchSuggestions}
+              files={streaming.pictures}
               streaming
               status={status}
             />
@@ -698,8 +711,15 @@ function MessageFiles({ bot, files, className }: { bot: Bot; files: Attachment[]
         const image = file.mediaType.startsWith("image/");
         if (image && (file.preview ?? url)) {
           return (
-            <a key={file.id ?? index} href={url ?? file.preview} target="_blank" rel="noopener noreferrer" className="file-thumb">
-              <img src={file.preview ?? url} alt={file.name} />
+            <a
+              key={file.id ?? index}
+              href={url ?? file.preview}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="file-thumb"
+              title={file.prompt}
+            >
+              <img src={file.preview ?? url} alt={file.prompt ?? file.name} />
             </a>
           );
         }
