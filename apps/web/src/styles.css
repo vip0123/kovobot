@@ -2262,7 +2262,127 @@ select:disabled {
   overflow-wrap: anywhere;
 }
 
-/* The Tools tab: MCP servers and their tools */
+/* An action the Bot asks to take, under the reply that asked */
+.approval {
+  align-self: flex-start;
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.approval.waiting {
+  border-color: var(--warning);
+  box-shadow: 0 0 0 3px var(--warning-soft);
+}
+
+.approval-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.approval-tool {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.approval-ask,
+.approval-outcome {
+  margin: 0;
+  color: var(--text-soft);
+}
+
+.approval-args {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--code-bg);
+  font-size: 0.875rem;
+}
+
+.approval-args dt {
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.approval-args dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.approval-always {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-soft);
+}
+
+.approval-always input {
+  margin-top: 3px;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.approval-outcome.done {
+  color: var(--success);
+}
+
+.approval-outcome.failed,
+.approval-outcome.unknown {
+  color: var(--danger);
+}
+
+.approval-result pre {
+  margin: 6px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--code-bg);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.badge.kind-pay,
+.badge.kind-delete {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.badge.kind-send,
+.badge.kind-change {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+@media (max-width: 560px) {
+  .approval-args {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The Tools tab: MCP servers and their tools, and the Bot's Pre-approvals */
+.drawer-subhead {
+  margin: 12px 0 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
 .mcp-tools {
   list-style: none;
   margin: 6px 0 0;

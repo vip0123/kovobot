@@ -58,6 +58,18 @@ export class FakeMcpServer {
           return { content: [{ type: "text", text: "Cancelled." }] };
         },
       );
+      // No annotations: a tool that sends something, as most servers leave theirs unmarked.
+      server.registerTool(
+        "email_receipt",
+        {
+          description: "Emails an order's receipt to the person who ordered.",
+          inputSchema: fromJsonSchema({ type: "object", properties: { order: { type: "integer" } }, required: ["order"] }),
+        },
+        async (args) => {
+          this.calls.push({ name: "email_receipt", args, authorization: this.authorization });
+          return { content: [{ type: "text", text: `Receipt for order ${(args as { order: number }).order} sent.` }] };
+        },
+      );
       // A name that only differs from lookup_order in a character model tool names can't have.
       server.registerTool(
         "lookup.order",

@@ -28,4 +28,5 @@ test("the server boots with an empty environment", async () => {
   } finally {
     server.kill();
   }
-}, 20_000);
+  // About 5 seconds alone; with every other test file running beside it, a cold start can take 20.
+}, 45_000);

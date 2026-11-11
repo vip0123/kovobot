@@ -3,6 +3,7 @@ import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
 import { type Db, transaction } from "@kovobot/db";
 import type { AppDeps } from "./app.ts";
+import { approvalView, carryOut, decideApproval, decisionMessage, listApprovals, preApprovalRoutes } from "./approvals.ts";
 import { findAttachment, readAttachments, saveAttachments } from "./attachments.ts";
 import { sessionCustomer } from "./auth/sessions.ts";
 import { computerRoutes, computerSizes, deleteBotComputer } from "./computer-routes.ts";
@@ -122,12 +123,72 @@ export function botRoutes(deps: AppDeps) {
   routes.route("/bots/:id/notes", noteRoutes(deps));
   routes.route("/bots/:id/schedules", scheduleRoutes(deps));
   routes.route("/", mcpRoutes(deps));
+  routes.route("/bots/:id/pre-approvals", preApprovalRoutes(deps));
 
+  // The Conversation, and each action its Bot asked to take, shown under the reply that asked.
   routes.get("/bots/:id/messages", async (c) => {
     const bot = await findBot(deps.db, c.get("customer").id, c.req.param("id"));
     if (!bot) return botNotFound(c);
     const conversationId = await webConversation(deps.db, bot.id, deps.now());
-    return c.json({ messages: await listMessages(deps.db, conversationId) });
+    return c.json({ messages: await listMessages(deps.db, conversationId), approvals: await listApprovals(deps, conversationId) });
+  });
+
+  // The Customer approves or declines an action the Bot asked to take. Approved, it runs once,
+  // exactly as asked; either way the Bot hears the decision and carries on, streamed like a reply.
+  routes.post("/bots/:id/approvals/:approvalId", async (c) => {
+    const bot = await findBot(deps.db, c.get("customer").id, c.req.param("id"));
+    if (!bot) return botNotFound(c);
+    const { decision, alwaysAllow } = await jsonBody(c);
+    if (decision !== "approve" && decision !== "decline") return apiError(c, 400, "invalid_decision", "Say approve or decline.");
+    const model = describeModel(bot.model);
+    const adapter = model ? deps.models[model.provider] : null;
+    if (!model || !adapter) {
+      return apiError(c, 503, "model_unavailable", `${model?.name ?? bot.model} isn't available here right now.`);
+    }
+    const conversationId = await webConversation(deps.db, bot.id, deps.now());
+    if (!(await startReplying(deps.db, conversationId, deps.now()))) {
+      return apiError(c, 409, "bot_busy", `${bot.name} is still answering the last message.`);
+    }
+    let decided: Awaited<ReturnType<typeof decideApproval>>;
+    try {
+      decided = await decideApproval(deps, bot.id, c.req.param("approvalId"), { approve: decision === "approve", alwaysAllow: alwaysAllow === true });
+    } catch (error) {
+      await stopReplying(deps.db, conversationId);
+      throw error;
+    }
+    if ("error" in decided) {
+      await stopReplying(deps.db, conversationId);
+      if (decided.error === "not_found") return apiError(c, 404, "approval_not_found", "There's no such Approval.");
+      if (decided.error === "decided") return apiError(c, 409, "approval_decided", "That has been decided already.");
+      return apiError(c, 400, "never_pre_approved", "Paying is never pre-approved: each payment waits for your Approval.");
+    }
+    const asked = decided.approval;
+
+    return streamSSE(c, async (stream) => {
+      const send = async (event: string, data: unknown) => {
+        if (!stream.aborted) await stream.writeSSE({ event, data: JSON.stringify(data) }).catch(() => {});
+      };
+      let approval = approvalView(asked, deps.now());
+      try {
+        await send("approval", { approval });
+        if (approval.state === "running") {
+          approval = await carryOut(deps, asked);
+          await send("approval", { approval });
+        }
+        const message = await addMessage(deps.db, conversationId, "user", decisionMessage(approval), deps.now(), { approvalId: approval.id });
+        await send("sent", { message });
+      } catch (error) {
+        await stopReplying(deps.db, conversationId);
+        throw error;
+      }
+      const timeZone = await customerClock(deps.db, c.get("customer").id, undefined);
+      const ran = approval.state === "done" || approval.state === "failed";
+      await runReply(
+        deps,
+        { bot, model, adapter, conversationId, thinking: "normal", webSearch: false, timeZone, ...(ran ? { actionResult: approval.result ?? "" } : {}) },
+        send,
+      );
+    });
   });
 
   // A message may carry files, sent as base64 in its JSON: room for the most a message may attach.

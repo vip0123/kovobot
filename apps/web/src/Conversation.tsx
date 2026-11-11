@@ -2,6 +2,7 @@ import {
   type ClipboardEvent,
   type DragEvent,
   type FormEvent,
+  Fragment,
   type KeyboardEvent,
   lazy,
   Suspense,
@@ -10,7 +11,18 @@ import {
   useRef,
   useState,
 } from "react";
-import { api, ApiError, type Attachment, type Bot, errorMessage, type Message, type ModelCatalog, type WebSource } from "./api.ts";
+import {
+  api,
+  ApiError,
+  type Approval,
+  type Attachment,
+  type Bot,
+  errorMessage,
+  type Message,
+  type ModelCatalog,
+  type ReplyHandlers,
+  type WebSource,
+} from "./api.ts";
 import { BotAvatar } from "./BotAvatar.tsx";
 import { BulbIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, FileIcon, GlobeIcon, PaperclipIcon, SendIcon } from "./Icons.tsx";
 import { modelLabel } from "./ModelPicker.tsx";
@@ -44,6 +56,25 @@ const COMPUTER_SUGGESTION = {
   prompt: "Use your Computer: open Firefox, find today's top news headline and tell me what it says.",
 };
 
+/** A reply as it streams in: its text, what the model thinks first, the pages it found, and the actions it asks to take. */
+interface StreamingReply {
+  text: string;
+  thinking: string;
+  sources: WebSource[];
+  searchSuggestions?: string;
+  /** The Approvals this reply's Task asked for, which show under it once it's saved. */
+  asked: Set<string>;
+}
+
+function newReply(): StreamingReply {
+  return { text: "", thinking: "", sources: [], asked: new Set() };
+}
+
+/** An id for a message shown before it's saved, which the saved one's numeric id never matches. */
+function localId(kind: "pending" | "partial"): string {
+  return `${kind}-${Date.now()}`;
+}
+
 /** The Model provider a model id belongs to, as the catalog and its route prefix say. */
 function providerOf(catalog: ModelCatalog, model: string): string | undefined {
   if (model.startsWith("openrouter:")) return "openrouter";
@@ -62,15 +93,20 @@ export function Conversation({
   bot,
   catalog,
   messages,
+  approvals,
   loadError,
   onMessages,
+  onApprovals,
   canUseComputer,
 }: {
   bot: Bot;
   catalog: ModelCatalog;
   messages: Message[] | null;
+  /** Each action the Bot asked to take, shown under the reply that asked. */
+  approvals: Approval[];
   loadError: string | null;
   onMessages: (update: (messages: Message[]) => Message[]) => void;
+  onApprovals: (update: (approvals: Approval[]) => Approval[]) => void;
   canUseComputer: boolean;
 }) {
   const [draft, setDraft] = useState("");
@@ -109,14 +145,16 @@ export function Conversation({
     const timer = setInterval(() => {
       if (document.visibilityState !== "visible") return;
       api.messages(bot.id).then(
-        ({ messages: saved }) => {
-          if (saved.at(-1)?.id !== lastSaved) onMessages(() => saved);
+        ({ messages: saved, approvals: asked }) => {
+          if (saved.at(-1)?.id === lastSaved) return;
+          onMessages(() => saved);
+          onApprovals(() => asked);
         },
         () => {},
       );
     }, NEW_MESSAGES_POLL_MS);
     return () => clearInterval(timer);
-  }, [bot.id, idle, lastSaved, onMessages]);
+  }, [bot.id, idle, lastSaved, onMessages, onApprovals]);
 
   // The box grows with what's typed, up to a limit, then scrolls.
   useLayoutEffect(() => {
@@ -166,7 +204,7 @@ export function Conversation({
       return;
     }
     const sentFiles: Attachment[] = picked.map(({ file, preview }) => ({ name: file.name, mediaType: file.type, size: file.size, preview }));
-    const pendingId = `pending-${Date.now()}`;
+    const pendingId = localId("pending");
     const unsent = { draft, picked };
     setDraft("");
     setPicked([]);
@@ -174,7 +212,7 @@ export function Conversation({
       ...current,
       { id: pendingId, role: "user", content, attachments: sentFiles, createdAt: new Date().toISOString() },
     ]);
-    const reply = { text: "", thinking: "", sources: [] as WebSource[], searchSuggestions: undefined as string | undefined };
+    const reply = newReply();
     setStreaming({ ...reply });
     try {
       const saved = await api.sendMessage(
@@ -182,50 +220,23 @@ export function Conversation({
         content,
         { attachments, thinkHarder: thinksHarder, webSearch: searching },
         {
+          ...replyHandlers(reply),
           // The saved message replaces the one shown while sending, so its Attachments link straight away.
           onSent: (saved) => {
             onMessages((current) => current.map((message) => (message.id === pendingId ? saved : message)));
             for (const file of sentFiles) if (file.preview) URL.revokeObjectURL(file.preview);
           },
-          onText: (text) => {
-            reply.text += text;
-            setStreaming({ ...reply });
-            // Writing again means whatever the Bot was doing, such as using its Computer, is over.
-            setStatus(null);
-          },
-          onThinking: (text) => {
-            reply.thinking += text;
-            setStreaming({ ...reply });
-          },
-          onSources: (sources, searchSuggestions) => {
-            reply.sources = [...reply.sources, ...sources.filter((page) => !reply.sources.some((other) => other.url === page.url))];
-            reply.searchSuggestions = searchSuggestions ?? reply.searchSuggestions;
-            setStreaming({ ...reply });
-          },
-          onStatus: setStatus,
         },
       );
-      onMessages((current) => [...current, saved]);
+      replySaved(saved, reply);
     } catch (caught) {
       if (caught instanceof ApiError && caught.status >= 400) {
         // Refused before it was saved (too big, a file it can't take, the Bot busy): put it all back.
         onMessages((current) => current.filter((message) => message.id !== pendingId));
         setDraft(unsent.draft);
         setPicked(unsent.picked);
-      } else if (reply.text) {
-        // The Bot service keeps what the model already wrote, so the page keeps it too.
-        onMessages((current) => [
-          ...current,
-          {
-            id: `partial-${Date.now()}`,
-            role: "assistant",
-            content: reply.text,
-            thinking: reply.thinking || null,
-            sources: reply.sources,
-            searchSuggestions: reply.searchSuggestions ?? null,
-            createdAt: new Date().toISOString(),
-          },
-        ]);
+      } else {
+        keepPartial(reply);
       }
       setError(errorMessage(caught));
     } finally {
@@ -233,6 +244,101 @@ export function Conversation({
       setStatus(null);
       box.current?.focus();
     }
+  }
+
+  /**
+   * Approves or declines an action the Bot asked to take. Approved, it runs once; either way the
+   * Bot hears the decision and carries on, its reply streaming in as for a message.
+   */
+  async function decide(approval: Approval, decision: "approve" | "decline", alwaysAllow: boolean) {
+    if (streaming !== null) return;
+    setError(null);
+    const reply = newReply();
+    setStreaming({ ...reply });
+    try {
+      const saved = await api.decideApproval(
+        bot.id,
+        approval.id,
+        { decision, alwaysAllow },
+        {
+          ...replyHandlers(reply),
+          // The decision as the Bot hears it: kept with the messages, shown on the Approval's card.
+          onSent: (message) => onMessages((current) => [...current, message]),
+        },
+      );
+      replySaved(saved, reply);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status >= 400) {
+        // Decided already, perhaps in another tab, or the Bot busy: show things as they now are.
+        api.messages(bot.id).then(
+          ({ messages: saved, approvals: asked }) => {
+            onMessages(() => saved);
+            onApprovals(() => asked);
+          },
+          () => {},
+        );
+      } else {
+        keepPartial(reply);
+      }
+      setError(errorMessage(caught));
+    } finally {
+      setStreaming(null);
+      setStatus(null);
+    }
+  }
+
+  /** What a streamed reply does to the page as it arrives; `reply` collects it. */
+  function replyHandlers(reply: StreamingReply): ReplyHandlers {
+    return {
+      onText: (text) => {
+        reply.text += text;
+        setStreaming({ ...reply });
+        // Writing again means whatever the Bot was doing, such as using its Computer, is over.
+        setStatus(null);
+      },
+      onThinking: (text) => {
+        reply.thinking += text;
+        setStreaming({ ...reply });
+      },
+      onSources: (sources, searchSuggestions) => {
+        reply.sources = [...reply.sources, ...sources.filter((page) => !reply.sources.some((other) => other.url === page.url))];
+        reply.searchSuggestions = searchSuggestions ?? reply.searchSuggestions;
+        setStreaming({ ...reply });
+      },
+      onStatus: setStatus,
+      // An action the Bot asks to take shows as it asks; news of one updates its card.
+      onApproval: (approval) => {
+        if (approval.messageId === null) reply.asked.add(approval.id);
+        onApprovals((current) =>
+          current.some((each) => each.id === approval.id)
+            ? current.map((each) => (each.id === approval.id ? approval : each))
+            : [...current, approval],
+        );
+      },
+    };
+  }
+
+  /** The reply is saved: the actions its Task asked to take now show under it. */
+  function replySaved(saved: Message, reply: StreamingReply) {
+    onMessages((current) => [...current, saved]);
+    onApprovals((current) => current.map((each) => (reply.asked.has(each.id) ? { ...each, messageId: saved.id } : each)));
+  }
+
+  /** The Bot service keeps what the model already wrote when a reply stops early, so the page keeps it too. */
+  function keepPartial(reply: StreamingReply) {
+    if (!reply.text) return;
+    onMessages((current) => [
+      ...current,
+      {
+        id: localId("partial"),
+        role: "assistant",
+        content: reply.text,
+        thinking: reply.thinking || null,
+        sources: reply.sources,
+        searchSuggestions: reply.searchSuggestions ?? null,
+        createdAt: new Date().toISOString(),
+      },
+    ]);
   }
 
   function sendOnEnter(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -279,17 +385,24 @@ export function Conversation({
             </div>
           )}
           {messages?.map((message) =>
-            message.role === "user" ? (
+            // A decision on an Approval is for the Bot: its card already shows it.
+            message.approvalId ? null : message.role === "user" ? (
               <UserMessage key={message.id} bot={bot} message={message} />
             ) : (
-              <BotMessage
-                key={message.id}
-                bot={bot}
-                text={message.content}
-                thinking={message.thinking ?? ""}
-                sources={message.sources ?? []}
-                searchSuggestions={message.searchSuggestions ?? undefined}
-              />
+              <Fragment key={message.id}>
+                <BotMessage
+                  bot={bot}
+                  text={message.content}
+                  thinking={message.thinking ?? ""}
+                  sources={message.sources ?? []}
+                  searchSuggestions={message.searchSuggestions ?? undefined}
+                />
+                {approvals
+                  .filter((approval) => approval.messageId === message.id)
+                  .map((approval) => (
+                    <ApprovalCard key={approval.id} bot={bot} approval={approval} busy={streaming !== null} onDecide={decide} />
+                  ))}
+              </Fragment>
             ),
           )}
           {streaming !== null && (
@@ -303,6 +416,12 @@ export function Conversation({
               status={status}
             />
           )}
+          {/* Asked by the reply being written, or by one that stopped before it was saved. */}
+          {approvals
+            .filter((approval) => approval.messageId === null || !messages?.some((message) => message.id === approval.messageId))
+            .map((approval) => (
+              <ApprovalCard key={approval.id} bot={bot} approval={approval} busy={streaming !== null} onDecide={decide} />
+            ))}
           {error && (
             <p className="alert" role="alert">
               {error}
@@ -428,6 +547,109 @@ export function Conversation({
 }
 
 /** One of the Customer's messages: its files, then its words. */
+/** How each kind of action reads on its card. */
+const ACTION_KINDS: Record<Approval["kind"], { label: string; verb: string }> = {
+  send: { label: "Sends", verb: "send" },
+  change: { label: "Changes", verb: "change things" },
+  delete: { label: "Deletes", verb: "delete" },
+  pay: { label: "Pays", verb: "move money" },
+};
+
+/** What came of an action, once it's decided. */
+function approvalOutcome(approval: Approval): string {
+  switch (approval.state) {
+    case "running":
+      return "Running…";
+    case "done":
+      return approval.preApproved ? "Ran under your Pre-approval." : "Approved, and done.";
+    case "failed":
+      return "Approved, but it failed.";
+    case "declined":
+      return "Declined. It didn't run.";
+    case "unknown":
+      return "Kovobot restarted while this ran, so whether it happened can't be said. It won't run again: check, and ask again if needed.";
+    case "waiting":
+      return "";
+  }
+}
+
+/**
+ * An action the Bot asked to take, exactly as it would run: the Customer approves or declines it,
+ * and may pre-approve that kind of action on that tool, except paying.
+ */
+function ApprovalCard({
+  bot,
+  approval,
+  busy,
+  onDecide,
+}: {
+  bot: Bot;
+  approval: Approval;
+  busy: boolean;
+  onDecide: (approval: Approval, decision: "approve" | "decline", alwaysAllow: boolean) => void;
+}) {
+  const [alwaysAllow, setAlwaysAllow] = useState(false);
+  const kind = ACTION_KINDS[approval.kind];
+  const values = Object.entries(approval.arguments);
+  const waiting = approval.state === "waiting";
+  return (
+    <section
+      className={`approval${waiting ? " waiting" : ""}`}
+      aria-label={waiting ? `${bot.name} asks to use ${approval.tool.name}` : `${bot.name}'s action: ${approval.tool.name}`}
+    >
+      <div className="approval-head">
+        <span className={`badge kind-${approval.kind}`}>{kind.label}</span>
+        <span className="approval-tool">
+          {approval.tool.label} · <code>{approval.tool.name}</code>
+        </span>
+      </div>
+      {waiting && (
+        <p className="approval-ask">
+          {bot.name} asks to {kind.verb} with this. It runs exactly as shown, once, and only if you approve.
+        </p>
+      )}
+      {values.length > 0 && (
+        <dl className="approval-args">
+          {values.map(([name, value]) => (
+            <Fragment key={name}>
+              <dt>{name}</dt>
+              <dd>{typeof value === "string" ? value : JSON.stringify(value, null, 1)}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+      {waiting ? (
+        <>
+          {approval.kind === "pay" ? (
+            <p className="muted small">Paying always waits for your Approval.</p>
+          ) : (
+            <label className="approval-always small">
+              <input type="checkbox" checked={alwaysAllow} onChange={(event) => setAlwaysAllow(event.target.checked)} />
+              Pre-approve: let {bot.name} {kind.verb} with <code>{approval.tool.name}</code> without asking
+            </label>
+          )}
+          <div className="approval-actions">
+            <button type="button" className="button primary small" disabled={busy} onClick={() => onDecide(approval, "approve", alwaysAllow)}>
+              Approve
+            </button>
+            <button type="button" className="button ghost small" disabled={busy} onClick={() => onDecide(approval, "decline", false)}>
+              Decline
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className={`approval-outcome small ${approval.state}`}>{approvalOutcome(approval)}</p>
+      )}
+      {approval.result && (approval.state === "done" || approval.state === "failed") && (
+        <details className="approval-result small">
+          <summary>What it returned</summary>
+          <pre>{approval.result}</pre>
+        </details>
+      )}
+    </section>
+  );
+}
+
 function UserMessage({ bot, message }: { bot: Bot; message: Message }) {
   const files = message.attachments ?? [];
   // A schedule's firing sent it, not the Customer: shown as the task it is.

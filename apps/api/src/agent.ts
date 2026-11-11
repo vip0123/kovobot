@@ -1,3 +1,4 @@
+import type { Approval, ApprovalDesk } from "./approvals.ts";
 import type { TaskEvent } from "./driver.ts";
 import type { ConnectedTool } from "./mcp.ts";
 import type { ChatMessage, ConversationItem, FunctionTool, ModelAdapter, ThinkingEffort, ToolCall } from "./models/adapter.ts";
@@ -88,7 +89,12 @@ export interface TaskTools {
   schedules?: ScheduleBook;
   /** Tools from servers and apps the Customer connected to the Bot. What they return is Outside content. */
   connected?: ConnectedTool[];
+  /** Where a connected tool that does more than read asks for the Customer's Approval. */
+  approvals?: ApprovalDesk;
 }
+
+/** What a Task reports: the model's events, statuses, and each action it asked the Customer to approve. */
+export type AgentEvent = TaskEvent | { type: "approval"; approval: Approval };
 
 /** What a Task has read so far: once it reads Outside content, what it writes down is marked for the Customer to check. */
 interface TaskState {
@@ -114,8 +120,10 @@ export async function* runTask(
     thinking?: ThinkingEffort;
     /** Whether the model may search the web; its sources come back as a "sources" event. */
     webSearch?: boolean;
+    /** The Task starts with Outside content in front of it, such as what an approved action returned. */
+    outsideContentRead?: boolean;
   },
-): AsyncGenerator<TaskEvent> {
+): AsyncGenerator<AgentEvent> {
   const skills = task.tools?.skills?.list ?? [];
   const offered = [
     ...(task.tools?.useComputer ? [USE_COMPUTER] : []),
@@ -129,12 +137,13 @@ export async function* runTask(
     botName: task.botName,
     instructions: task.instructions,
     hasComputer: task.tools?.useComputer !== undefined,
+    hasConnectedTools: (task.tools?.connected?.length ?? 0) > 0,
     skills,
     notes: task.tools?.notes?.list,
   });
   // A Task that may search the web has read Outside content from its first call: the pages a
   // search reads reach the model whether or not its reply cites them.
-  const state: TaskState = { readOutsideContent: task.webSearch === true };
+  const state: TaskState = { readOutsideContent: task.webSearch === true || task.outsideContentRead === true };
   const conversation: ConversationItem[] = [...task.conversation];
   for (let step = 0; step < MAX_TASK_STEPS; step += 1) {
     const calls: ToolCall[] = [];
@@ -172,7 +181,7 @@ export async function* runTask(
 }
 
 /** Runs one tool call. */
-async function* runTool(call: ToolCall, task: { botName: string; tools?: TaskTools }, state: TaskState): AsyncGenerator<TaskEvent, string> {
+async function* runTool(call: ToolCall, task: { botName: string; tools?: TaskTools }, state: TaskState): AsyncGenerator<AgentEvent, string> {
   const { useComputer, skills, notes, schedules } = task.tools ?? {};
   if (call.name === USE_COMPUTER.name && useComputer) {
     // Whatever the Computer showed the Driver model is Outside content.
@@ -183,6 +192,7 @@ async function* runTool(call: ToolCall, task: { botName: string; tools?: TaskToo
   if (notes && call.name === NOTE_TOOL.name) return yield* writeNote(call, task.botName, notes.book, state);
   if (schedules && call.name === SCHEDULE_TOOL.name) return yield* useSchedules(call, task.botName, schedules, state);
   const connected = task.tools?.connected?.find(({ tool }) => tool.name === call.name);
+  if (connected && connected.kind !== "read") return yield* askToAct(call, connected, task, state);
   if (connected) {
     // Whatever an outside server or app sends back is Outside content.
     state.readOutsideContent = true;
@@ -194,6 +204,28 @@ async function* runTool(call: ToolCall, task: { botName: string; tools?: TaskToo
     }
   }
   return `There is no tool called ${call.name}.`;
+}
+
+/**
+ * A connected tool that sends, changes, deletes or pays: it waits for the Customer's Approval of
+ * exactly this action, unless a Pre-approval covers it and the Task hasn't read Outside content.
+ */
+async function* askToAct(
+  call: ToolCall,
+  connected: ConnectedTool,
+  task: { botName: string; tools?: TaskTools },
+  state: TaskState,
+): AsyncGenerator<AgentEvent, string> {
+  const desk = task.tools?.approvals;
+  if (!desk || connected.kind === "read") return "That tool needs the Customer's Approval, which can't be asked for here.";
+  const { approval, output } = await desk.ask(connected.action, connected.kind, call.input, { preApprovalsSuspended: state.readOutsideContent });
+  yield { type: "approval", approval };
+  if (approval.preApproved) {
+    // It ran, and what it returned is Outside content.
+    state.readOutsideContent = true;
+    yield { type: "status", text: `${task.botName} used ${approval.tool.label}: ${approval.tool.name}, which you pre-approved.` };
+  }
+  return output;
 }
 
 /**
@@ -284,6 +316,8 @@ function botInstructions(task: {
   botName: string;
   instructions?: string;
   hasComputer: boolean;
+  /** It has tools from servers or apps, whose earlier actions it knows only from Kovobot's record. */
+  hasConnectedTools: boolean;
   skills: SkillSummary[];
   notes?: Array<Pick<Note, "id" | "content">>;
 }): string {
@@ -294,6 +328,13 @@ function botInstructions(task: {
       "Answer clearly and briefly, and say so when you don't know something.",
       ...(task.hasComputer
         ? ["You have a Computer, a Linux desktop with Firefox: use use_computer for anything that needs a browser or desktop apps."]
+        : []),
+      ...(task.hasConnectedTools
+        ? [
+            "Earlier replies show only what you wrote, not your tool calls. What your tools did outside the Bot then is in " +
+              "Kovobot's record, in brackets at the end of each reply: it is accurate, so take it as done, and never do an " +
+              "action again because you can't see its tool call.",
+          ]
         : []),
     ].join(" "),
   ];
