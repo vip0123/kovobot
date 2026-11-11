@@ -21,6 +21,7 @@ import { FAKE_OPENAI_KEY, FakeOpenAI } from "./fake-openai.ts";
 import { FakeWeb } from "./fake-web.ts";
 import { FAKE_GEMINI_KEY, FakeGeminiInteractions } from "./fake-gemini-interactions.ts";
 import { createGoogleImageMaker, createOpenAIImageMaker } from "../src/media/images.ts";
+import { createGoogleSpeaker, createGoogleTranscriber, createOpenAITranscriber, type Transcriber } from "../src/media/speech.ts";
 
 /**
  * The API wired to the real, migrated test database. Only the edges are fake:
@@ -39,6 +40,8 @@ export function startTestServer(
     composio?: boolean;
     /** Which Model provider's image model Bots make pictures with, or none: OpenAI's unless set. */
     images?: "openai" | "google" | false;
+    /** Which Model provider hears voice notes (OpenAI's unless set), and whether Google's reads replies aloud (unless false). */
+    voice?: { hear?: "openai" | "google" | false; speak?: boolean };
   } = {},
 ) {
   const db = createDb(inject("databaseUrl"));
@@ -75,6 +78,7 @@ export function startTestServer(
   beforeAll(() => Promise.all([openai.start(), anthropic.start(), chatCompletions.start("/v1"), web.start(), geminiMedia.start()]));
   afterAll(() => Promise.all([openai.stop(), anthropic.stop(), chatCompletions.stop(), web.stop(), geminiMedia.stop()]));
   const images = options.images ?? "openai";
+  const hear = options.voice?.hear ?? "openai";
   // A fake's address is known only once it listens, so each adapter is made on first use.
   const lazy = (make: () => ModelAdapter): ModelAdapter => {
     let adapter: ModelAdapter | undefined;
@@ -138,6 +142,8 @@ export function startTestServer(
         : images === "google"
           ? lazily(() => createGoogleImageMaker({ apiKey: FAKE_GEMINI_KEY, baseURL: geminiMedia.baseUrl }))
           : null,
+    transcriber: hear === "openai" ? lazyTranscriber(() => createOpenAITranscriber({ apiKey: FAKE_OPENAI_KEY, baseURL: openai.baseUrl })) : hear === "google" ? lazyTranscriber(() => createGoogleTranscriber({ apiKey: FAKE_GEMINI_KEY, baseURL: geminiMedia.baseUrl })) : null,
+    speaker: options.voice?.speak === false ? null : lazily(() => createGoogleSpeaker({ apiKey: FAKE_GEMINI_KEY, baseURL: geminiMedia.baseUrl })),
     now: () => clock.now,
   };
   const app = createApp(deps);
@@ -191,6 +197,17 @@ export function startTestServer(
 }
 
 /** A client made on first call, once its fake's address is known. */
+/** A transcriber made on first use: like `lazily`, but it also has a set of what it hears, known up front. */
+function lazyTranscriber(make: () => Transcriber): Transcriber {
+  let transcriber: Transcriber | undefined;
+  return {
+    get hears() {
+      return (transcriber ??= make()).hears;
+    },
+    transcribe: (audio) => (transcriber ??= make()).transcribe(audio),
+  };
+}
+
 function lazily<Client extends object>(make: () => Client): Client {
   let client: Client | undefined;
   return new Proxy({} as Client, {

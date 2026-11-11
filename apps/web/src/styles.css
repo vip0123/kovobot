@@ -1437,6 +1437,47 @@ select:disabled {
   margin-left: auto;
 }
 
+/* Recording a voice note: the clock, and sending or throwing it away. */
+.recording-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 36px;
+}
+
+.recording-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.recording-time {
+  margin-right: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A voice note plays back above what it said. */
+.voice-note {
+  flex: none;
+  width: 280px;
+  max-width: 100%;
+  height: 36px;
+}
+
+/* A reply being read aloud keeps its button in view. */
+.icon-button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.message-tools:has(.active) {
+  opacity: 1;
+}
+
 .toggle {
   display: inline-flex;
   align-items: center;

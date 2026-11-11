@@ -10,6 +10,7 @@ import { SLEEP_SWEEP_MS, sleepIdleComputers } from "./computer-sleep.ts";
 import { fireDueSchedules } from "./firings.ts";
 import { liveViewUpgrade } from "./live-view.ts";
 import { createImageMaker } from "./media/images.ts";
+import { createSpeaker, createTranscriber } from "./media/speech.ts";
 import { createModelAdapters } from "./models/adapters.ts";
 import { FIRING_SWEEP_MS } from "./schedules.ts";
 
@@ -31,6 +32,8 @@ const deps: AppDeps = {
   computers: config.computerService ? createComputerServiceClient(config.computerService) : null,
   composio: config.composio ? createComposioClient({ apiKey: config.composio.apiKey }) : null,
   images: createImageMaker(config),
+  transcriber: createTranscriber(config),
+  speaker: createSpeaker(config),
   now: () => new Date(),
 };
 const app = createApp(deps);

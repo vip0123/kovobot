@@ -31,6 +31,8 @@ export interface ModelCatalog {
   local: boolean;
   /** The Model providers whose models may search the web here. */
   webSearch?: string[];
+  /** Whether voice notes are heard here, and whether replies can be read aloud. */
+  voice?: { hear: boolean; speak: boolean };
 }
 
 export interface Message {
@@ -170,6 +172,8 @@ export interface MessageOptions {
   webSearch?: boolean;
   /** Deep research: the Bot searches and reads in rounds, then writes a report. */
   research?: boolean;
+  /** A voice note: its recording, base64. What it says becomes the message. */
+  voiceNote?: { data: string };
 }
 
 /** What the Bot does while it replies, as it streams. */
@@ -358,6 +362,11 @@ export const api = {
 
   /** Where a message's file can be fetched, for its Customer only. */
   attachmentUrl: (botId: string, attachmentId: string) => `/api/bots/${botId}/attachments/${attachmentId}`,
+
+  /** One of the Bot's replies, read aloud, as audio to play. */
+  async speech(botId: string, messageId: string): Promise<Blob> {
+    return (await send(`/bots/${botId}/messages/${messageId}/speech`, { method: "POST" })).blob();
+  },
 
   /**
    * Sends a message on the web Channel and streams the Bot's reply: `onText` gets

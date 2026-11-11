@@ -4,7 +4,8 @@ import { streamSSE } from "hono/streaming";
 import { type Db, transaction } from "@kovobot/db";
 import type { AppDeps } from "./app.ts";
 import { approvalView, carryOut, decideApproval, decisionMessage, listApprovals, preApprovalRoutes } from "./approvals.ts";
-import { findAttachment, readAttachments, saveAttachments } from "./attachments.ts";
+import { findAttachment, type IncomingFile, MAX_VOICE_NOTE_BYTES, readAttachments, saveAttachments } from "./attachments.ts";
+import { audioType, type Speaker, SpeechError, spokenText, type Transcriber } from "./media/speech.ts";
 import { appRoutes } from "./composio.ts";
 import { sessionCustomer } from "./auth/sessions.ts";
 import { computerRoutes, computerSizes, deleteBotComputer } from "./computer-routes.ts";
@@ -45,6 +46,47 @@ function webSearchProviders(deps: Pick<AppDeps, "config" | "models">): ModelProv
   return SEARCHING_PROVIDERS.filter((provider) => deps.models[provider] !== null);
 }
 
+/**
+ * The speech-to-text model voice notes are heard with, and the text-to-speech model replies are
+ * read aloud with. Hosted, none yet: speech has no row in the Price table (ADR 0009).
+ */
+function hearing(deps: Pick<AppDeps, "config" | "transcriber">): Transcriber | null {
+  return deps.config.mode === "hosted" ? null : deps.transcriber;
+}
+
+function speaking(deps: Pick<AppDeps, "config" | "speaker">): Speaker | null {
+  return deps.config.mode === "hosted" ? null : deps.speaker;
+}
+
+/** What a voice note says, and its recording to keep; or why it can't be heard. */
+async function hearVoiceNote(
+  deps: Pick<AppDeps, "config" | "transcriber">,
+  raw: unknown,
+): Promise<{ transcript: string; recording: IncomingFile } | { status: 400 | 413 | 422 | 502; code: string; error: string }> {
+  const transcriber = hearing(deps);
+  if (!transcriber) return { status: 400, code: "voice_unavailable", error: "Voice notes aren't set up here. Type your message instead." };
+  const data = (raw as { data?: unknown }).data;
+  if (typeof data !== "string" || !data) return { status: 400, code: "invalid_voice_note", error: "Send the voice note's recording." };
+  const bytes = Buffer.from(data, "base64");
+  if (bytes.length > MAX_VOICE_NOTE_BYTES) return { status: 413, code: "voice_note_too_long", error: "That voice note is too long: about ten minutes at most." };
+  const mediaType = audioType(bytes);
+  if (!mediaType || !transcriber.hears.has(mediaType)) {
+    return { status: 400, code: "invalid_voice_note", error: "That recording can't be heard here. Record it again in the browser." };
+  }
+  let transcript: string;
+  try {
+    transcript = await transcriber.transcribe({ bytes, mediaType });
+  } catch (error) {
+    console.error("Hearing a voice note failed", error);
+    return { status: 502, code: "voice_note_unheard", error: error instanceof SpeechError ? error.message : "Your voice note couldn't be heard just now." };
+  }
+  if (!transcript) {
+    return { status: 422, code: "voice_note_silent", error: "No words were heard in that voice note. Try again a little closer to the microphone." };
+  }
+  const extension = { "audio/webm": "webm", "audio/ogg": "ogg", "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/wav": "wav" }[mediaType];
+  return { transcript: transcript.slice(0, MAX_MESSAGE_LENGTH), recording: { name: `Voice note.${extension}`, mediaType, bytes } };
+}
+
 const MAX_NAME_LENGTH = 80;
 const MAX_INSTRUCTIONS_LENGTH = 8_000;
 const MAX_MESSAGE_LENGTH = 20_000;
@@ -70,6 +112,8 @@ export function botRoutes(deps: AppDeps) {
       local: deps.models.local !== null,
       // A Bot on one of these may search the web when a message asks it to.
       webSearch: webSearchProviders(deps),
+      // Whether voice notes are heard here, and whether replies can be read aloud.
+      voice: { hear: hearing(deps) !== null, speak: speaking(deps) !== null },
     }),
   );
 
@@ -193,9 +237,9 @@ export function botRoutes(deps: AppDeps) {
     });
   });
 
-  // A message may carry files, sent as base64 in its JSON: room for the most a message may attach.
+  // A message may carry files and a voice note, sent as base64 in its JSON: room for the most of both.
   const messageSize = bodyLimit({
-    maxSize: 20 * 1024 * 1024,
+    maxSize: 32 * 1024 * 1024,
     onError: (c) => apiError(c, 413, "message_too_large", "That message is too big to send. Attach smaller files, or fewer at a time."),
   });
 
@@ -214,14 +258,41 @@ export function botRoutes(deps: AppDeps) {
     });
   });
 
+  // One of the Bot's replies, read aloud. Made each time it's asked for, so it's a POST: it costs.
+  routes.post("/bots/:id/messages/:messageId/speech", async (c) => {
+    const speaker = speaking(deps);
+    if (!speaker) return apiError(c, 404, "speech_unavailable", "Replies can't be read aloud here.");
+    const bot = await findBot(deps.db, c.get("customer").id, c.req.param("id"));
+    if (!bot) return botNotFound(c);
+    const messageId = c.req.param("messageId");
+    const conversationId = await webConversation(deps.db, bot.id, deps.now());
+    const { rows } = /^\d{1,18}$/.test(messageId)
+      ? await deps.db.query<{ content: string }>("SELECT content FROM messages WHERE id = $1 AND conversation_id = $2 AND role = 'assistant'", [
+          messageId,
+          conversationId,
+        ])
+      : { rows: [] };
+    if (!rows[0]) return apiError(c, 404, "message_not_found", `There's no such reply from ${bot.name}.`);
+    const words = spokenText(rows[0].content);
+    if (!words) return apiError(c, 400, "nothing_to_say", "That reply has no words to read aloud.");
+    try {
+      const audio = await speaker.speak(words);
+      return c.body(new Uint8Array(audio.bytes), 200, { "content-type": audio.mediaType, "cache-control": "private, no-store" });
+    } catch (error) {
+      console.error(`Bot ${bot.id}: reading a reply aloud failed`, error);
+      return apiError(c, 502, "speech_failed", error instanceof SpeechError ? error.message : "That reply couldn't be read aloud just now.");
+    }
+  });
+
   routes.post("/bots/:id/messages", messageSize, async (c) => {
     const bot = await findBot(deps.db, c.get("customer").id, c.req.param("id"));
     if (!bot) return botNotFound(c);
-    const { content, thinkHarder, webSearch, research, attachments, timeZone } = await jsonBody(c);
-    const text = typeof content === "string" ? content.trim() : "";
+    const { content, thinkHarder, webSearch, research, attachments, timeZone, voiceNote } = await jsonBody(c);
+    const typed = typeof content === "string" ? content.trim() : "";
     const files = readAttachments(attachments);
     if ("error" in files) return apiError(c, 400, "invalid_attachments", files.error);
-    if ((!text && files.length === 0) || text.length > MAX_MESSAGE_LENGTH) {
+    const speaks = voiceNote !== undefined && voiceNote !== null;
+    if (((!typed && files.length === 0) && !speaks) || typed.length > MAX_MESSAGE_LENGTH) {
       return apiError(c, 400, "invalid_message", `Write a message of up to ${MAX_MESSAGE_LENGTH.toLocaleString("en-US")} characters.`);
     }
     // The Bot's model may since have gone: its Model provider's key removed.
@@ -239,16 +310,21 @@ export function botRoutes(deps: AppDeps) {
         : apiError(c, 400, "web_search_unavailable", `${model.name} can't search the web here. Send the message without web search.`);
     }
 
+    // A voice note is heard before anything is kept: what it says is the message, after anything typed.
+    const heard = speaks ? await hearVoiceNote(deps, voiceNote) : null;
+    if (heard && "error" in heard) return apiError(c, heard.status, heard.code, heard.error);
+    const text = [typed, heard?.transcript].filter(Boolean).join("\n\n");
+
     const conversationId = await webConversation(deps.db, bot.id, deps.now());
     if (!(await startReplying(deps.db, conversationId, deps.now()))) {
       return apiError(c, 409, "bot_busy", `${bot.name} is still answering the last message.`);
     }
     let sent: Message;
     try {
-      // The message and its Attachments are kept together, or not at all.
+      // The message and its Attachments, its recording among them, are kept together, or not at all.
       sent = await transaction(deps.db, async (client) => {
         const message = await addMessage(client, conversationId, "user", text, deps.now());
-        return { ...message, attachments: await saveAttachments(client, message.id, files, deps.now()) };
+        return { ...message, attachments: await saveAttachments(client, message.id, heard ? [...files, heard.recording] : files, deps.now()) };
       });
     } catch (error) {
       await stopReplying(deps.db, conversationId);

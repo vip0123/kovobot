@@ -108,7 +108,20 @@ export class FakeOpenAI {
   /** What the Image API answers next: a picture, or a refusal under OpenAI's usage policy. */
   nextImage: "picture" | "refuse" = "picture";
 
+  /** Every request to the transcription endpoint, as its raw multipart body. */
+  readonly transcriptionRequests: string[] = [];
+  /** What the transcription model hears next: these words, nothing, or it fails. */
+  nextTranscript: string | { fail: number } = "What's in the oven today?";
+
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method === "POST" && request.url === "/v1/audio/transcriptions" && request.headers.authorization === `Bearer ${FAKE_OPENAI_KEY}`) {
+      this.transcriptionRequests.push(Buffer.from(await readBody(request), "utf8").toString("latin1"));
+      const next = this.nextTranscript;
+      this.nextTranscript = "What's in the oven today?";
+      if (typeof next === "object") sendJson(response, next.fail, { error: { message: "The server had an error.", type: "server_error" } });
+      else sendJson(response, 200, { text: next, languages: [{ code: "en" }] });
+      return;
+    }
     if (request.method !== "POST" || (request.url !== "/v1/responses" && request.url !== "/v1/images/generations")) {
       response.writeHead(404).end();
       return;

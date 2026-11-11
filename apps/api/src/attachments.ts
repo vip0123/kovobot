@@ -1,4 +1,5 @@
 import type { Db } from "@kovobot/db";
+import type { AudioType } from "./media/speech.ts";
 import type { ChatMessage, FileForModel } from "./models/adapter.ts";
 import { UUID_PATTERN } from "./http.ts";
 
@@ -7,6 +8,8 @@ import { UUID_PATTERN } from "./http.ts";
 
 export const MAX_ATTACHMENTS = 5;
 const MB = 1024 * 1024;
+/** A voice note's recording: about ten minutes of speech, as browsers record it. */
+export const MAX_VOICE_NOTE_BYTES = 10 * MB;
 // Anthropic takes images of up to 5 MB; Gemini takes up to 20 MB in one request, base64 included.
 const LIMITS: Record<AttachmentType, number> = {
   "image/png": 5 * MB,
@@ -15,12 +18,18 @@ const LIMITS: Record<AttachmentType, number> = {
   "image/webp": 5 * MB,
   "application/pdf": 10 * MB,
   "text/plain": MB / 2,
+  // Voice notes, which come in on their own and are never attached by hand.
+  "audio/webm": MAX_VOICE_NOTE_BYTES,
+  "audio/ogg": MAX_VOICE_NOTE_BYTES,
+  "audio/mp4": MAX_VOICE_NOTE_BYTES,
+  "audio/mpeg": MAX_VOICE_NOTE_BYTES,
+  "audio/wav": MAX_VOICE_NOTE_BYTES,
 };
 const MAX_TOTAL_BYTES = 12 * MB;
 /** What one model call carries in files, newest first; older files are named instead. */
 const MODEL_FILE_BUDGET = 12 * MB;
 
-export type AttachmentType = FileForModel["mediaType"] | "text/plain";
+export type AttachmentType = FileForModel["mediaType"] | "text/plain" | AudioType;
 
 /** A file as it arrives, checked: the Customer's, or one the Bot made. */
 export interface IncomingFile {
@@ -108,11 +117,13 @@ export async function conversationForModel(
   messages: Array<{ role: "user" | "assistant"; content: string; attachments: AttachmentInfo[] }>,
   { pdfs }: { pdfs: boolean },
 ): Promise<ChatMessage[]> {
-  const ids = messages.flatMap((message) => (message.role === "user" ? message.attachments.map((file) => file.id) : []));
-  if (ids.length === 0) return messages.map(({ role, content, attachments }) => ({ role, content: withPictures(role, content, attachments) }));
+  // A voice note's recording isn't sent: its transcript is the message.
+  const filesOf = (attachments: AttachmentInfo[]) => attachments.filter((file) => !isRecording(file));
+  const ids = messages.flatMap((message) => (message.role === "user" ? filesOf(message.attachments).map((file) => file.id) : []));
+  if (ids.length === 0) return messages.map(({ role, content, attachments }) => ({ role, content: asSaid(role, content, attachments) }));
 
   // Newest first (the latest message's last Attachment first), stopping at the first that doesn't fit.
-  const newestFirst = messages.flatMap((message) => (message.role === "user" ? message.attachments : [])).reverse();
+  const newestFirst = messages.flatMap((message) => (message.role === "user" ? filesOf(message.attachments) : [])).reverse();
   const shown = new Set<string>();
   let used = 0;
   for (const file of newestFirst) {
@@ -127,18 +138,33 @@ export async function conversationForModel(
   const data = new Map(rows.map((row) => [row.id, row.data]));
 
   return messages.map(({ role, content, attachments }) => {
-    if (role !== "user" || attachments.length === 0) return { role, content: withPictures(role, content, attachments) };
+    if (role !== "user" || filesOf(attachments).length === 0) return { role, content: asSaid(role, content, attachments) };
     const texts: string[] = [];
     const files: FileForModel[] = [];
-    for (const file of attachments) {
+    content = asSaid(role, content, attachments);
+    for (const file of filesOf(attachments)) {
       const bytes = data.get(file.id);
       if (file.mediaType === "application/pdf" && !pdfs) texts.push(`[${file.name} is a PDF, which this model can't read here.]`);
       else if (!bytes) texts.push(`[${file.name} was attached here; it isn't shown any more.]`);
       else if (file.mediaType === "text/plain") texts.push(`<file name="${file.name.replaceAll('"', "'")}">\n${bytes.toString("utf8")}\n</file>`);
-      else files.push({ name: file.name, mediaType: file.mediaType, data: bytes.toString("base64") });
+      else files.push({ name: file.name, mediaType: file.mediaType as FileForModel["mediaType"], data: bytes.toString("base64") });
     }
     return { role, content: [content, ...texts].filter(Boolean).join("\n\n"), ...(files.length > 0 ? { attachments: files } : {}) };
   });
+}
+
+/** A voice note's recording, kept for the Customer to play back. */
+function isRecording(file: AttachmentInfo): boolean {
+  return file.mediaType.startsWith("audio/");
+}
+
+/**
+ * A message as the model sees it: a voice note is marked as spoken, since a transcript may mishear,
+ * and a reply carries the pictures it made.
+ */
+function asSaid(role: "user" | "assistant", content: string, attachments: AttachmentInfo[]): string {
+  if (role === "user") return attachments.some(isRecording) ? `[A voice note, as transcribed]\n${content}` : content;
+  return withPictures(role, content, attachments);
 }
 
 /**
