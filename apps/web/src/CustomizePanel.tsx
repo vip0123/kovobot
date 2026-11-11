@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router";
-import { api, type Bot, errorMessage, type Note, type Skill } from "./api.ts";
+import { api, BROWSER_TIME_ZONE, type Bot, errorMessage, type Note, type Schedule, type ScheduleRule, type Skill } from "./api.ts";
 import { CloseIcon } from "./Icons.tsx";
 
 /** The most a Bot's instructions may hold, as the API allows. */
@@ -10,6 +10,7 @@ const TABS = [
   { id: "instructions", label: "Instructions" },
   { id: "skills", label: "Skills" },
   { id: "memory", label: "Memory" },
+  { id: "schedules", label: "Schedules" },
 ] as const;
 
 type Tab = (typeof TABS)[number]["id"];
@@ -58,6 +59,7 @@ export function CustomizePanel({
         {tab === "instructions" && <InstructionsEditor bot={bot} onBotChange={onBotChange} />}
         {tab === "skills" && <SkillGrants bot={bot} />}
         {tab === "memory" && <Memory bot={bot} conversationLength={conversationLength} />}
+        {tab === "schedules" && <Schedules bot={bot} conversationLength={conversationLength} />}
       </div>
     </section>
   );
@@ -340,6 +342,302 @@ function InstructionsEditor({ bot, onBotChange }: { bot: Bot; onBotChange: (bot:
           </button>
         )}
         {saved && !changed && <span className="muted small">Saved. {bot.name} uses them from the next message.</span>}
+      </div>
+    </form>
+  );
+}
+
+const REPEAT_LABELS: Record<ScheduleRule["repeat"], string> = {
+  once: "Once",
+  daily: "Every day",
+  weekdays: "On weekdays",
+  weekly: "Every week",
+  monthly: "Every month",
+};
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** "Every Mon, Wed at 08:30" */
+function describeWhen(when: ScheduleRule): string {
+  switch (when.repeat) {
+    case "once": {
+      const day = new Date(`${when.date}T00:00:00Z`).toLocaleDateString(undefined, {
+        timeZone: "UTC",
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
+      return `Once, on ${day} at ${when.time}`;
+    }
+    case "daily":
+      return `Every day at ${when.time}`;
+    case "weekdays":
+      return `On weekdays at ${when.time}`;
+    case "weekly":
+      return `Every ${(when.days ?? []).map((day) => DAY_NAMES[day]).join(", ")} at ${when.time}`;
+    case "monthly":
+      return `Every month on day ${when.dayOfMonth} at ${when.time}`;
+  }
+}
+
+/** When it next runs, on its own time zone's clock. */
+function nextRun(schedule: Schedule): string {
+  if (!schedule.nextRunAt) return schedule.lastRunAt ? "Done" : "Off";
+  const at = new Date(schedule.nextRunAt).toLocaleString(undefined, {
+    timeZone: schedule.timeZone,
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `Next: ${at}`;
+}
+
+/** The Bot's schedules: tasks it does on its own, once or repeating. The Customer sets, changes, pauses and deletes them. */
+function Schedules({ bot, conversationLength }: { bot: Bot; conversationLength: number }) {
+  const [schedules, setSchedules] = useState<Schedule[] | null>(null);
+  const [editing, setEditing] = useState<Schedule | "new" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.schedules(bot.id).then(
+      ({ schedules }) => setSchedules(schedules),
+      (caught: unknown) => {
+        setSchedules([]);
+        setError(errorMessage(caught));
+      },
+    );
+  }, [bot.id, conversationLength]);
+
+  const replace = (schedule: Schedule) =>
+    setSchedules((current) =>
+      current?.some((each) => each.id === schedule.id)
+        ? current.map((each) => (each.id === schedule.id ? schedule : each))
+        : [...(current ?? []), schedule],
+    );
+
+  async function run(action: () => Promise<void>) {
+    setError(null);
+    try {
+      await action();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  if (editing) {
+    return (
+      <ScheduleForm
+        bot={bot}
+        initial={editing === "new" ? null : editing}
+        onSaved={(schedule) => {
+          replace(schedule);
+          setEditing(null);
+        }}
+        onCancel={() => setEditing(null)}
+      />
+    );
+  }
+
+  return (
+    <div className="drawer-section">
+      <p className="muted small">
+        {bot.name} does these on its own at their times, and its replies land in your Conversation. You can also ask it in a
+        message, such as: every weekday at 8, send me the day&apos;s orders.
+      </p>
+      {schedules === null ? (
+        <p className="muted small">Loading…</p>
+      ) : schedules.length === 0 ? (
+        <p className="memory-empty small">No schedules yet.</p>
+      ) : (
+        <ul className="notes">
+          {schedules.map((schedule) => (
+            <li key={schedule.id} className={`note schedule${schedule.enabled ? "" : " off"}`}>
+              <div className="schedule-head">
+                <p className="note-text schedule-task">{schedule.task}</p>
+                <label className="switch" title={schedule.enabled ? "On" : "Off"}>
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    checked={schedule.enabled}
+                    aria-label={`${schedule.enabled ? "Switch off" : "Switch on"}: ${schedule.task}`}
+                    onChange={(event) =>
+                      void run(async () => replace((await api.changeSchedule(bot.id, schedule.id, { enabled: event.target.checked })).schedule))
+                    }
+                  />
+                  <span aria-hidden="true" />
+                </label>
+              </div>
+              <p className="muted small schedule-when">
+                {describeWhen(schedule.when)} · {schedule.timeZone}
+              </p>
+              <div className="note-foot">
+                <span className="muted small">
+                  {nextRun(schedule)}
+                  {schedule.createdBy === "bot" ? ` · set by ${bot.name}` : ""}
+                </span>
+                <button type="button" className="button ghost small" onClick={() => setEditing(schedule)}>
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  className="button ghost small danger-text"
+                  onClick={() =>
+                    void run(async () => {
+                      await api.deleteSchedule(bot.id, schedule.id);
+                      setSchedules((current) => current?.filter((each) => each.id !== schedule.id) ?? null);
+                    })
+                  }
+                >
+                  Delete
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="actions">
+        <button type="button" className="button secondary small" onClick={() => setEditing("new")}>
+          New schedule
+        </button>
+      </div>
+      {error && (
+        <p className="alert" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Setting a schedule, or changing one. */
+function ScheduleForm({
+  bot,
+  initial,
+  onSaved,
+  onCancel,
+}: {
+  bot: Bot;
+  initial: Schedule | null;
+  onSaved: (schedule: Schedule) => void;
+  onCancel: () => void;
+}) {
+  const [task, setTask] = useState(initial?.task ?? "");
+  const [repeat, setRepeat] = useState<ScheduleRule["repeat"]>(initial?.when.repeat ?? "daily");
+  const [time, setTime] = useState(initial?.when.time ?? "09:00");
+  const [date, setDate] = useState(initial?.when.date ?? new Date().toISOString().slice(0, 10));
+  const [days, setDays] = useState<number[]>(initial?.when.days ?? [1]);
+  const [dayOfMonth, setDayOfMonth] = useState(initial?.when.dayOfMonth ?? 1);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const timeZone = initial?.timeZone ?? BROWSER_TIME_ZONE;
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    const when: ScheduleRule = {
+      repeat,
+      time,
+      ...(repeat === "once" ? { date } : {}),
+      ...(repeat === "weekly" ? { days } : {}),
+      ...(repeat === "monthly" ? { dayOfMonth } : {}),
+    };
+    setSaving(true);
+    setError(null);
+    try {
+      const { schedule } = initial
+        ? await api.changeSchedule(bot.id, initial.id, { task, when })
+        : await api.addSchedule(bot.id, { task, when, timeZone });
+      onSaved(schedule);
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="drawer-section schedule-form" onSubmit={save}>
+      <div className="field">
+        <label htmlFor="schedule-task">What should {bot.name} do?</label>
+        <textarea
+          id="schedule-task"
+          rows={3}
+          required
+          maxLength={2_000}
+          autoFocus
+          placeholder="Send me a summary of yesterday's orders."
+          value={task}
+          onChange={(event) => setTask(event.target.value)}
+        />
+      </div>
+      <div className="schedule-when-fields">
+        <div className="field">
+          <label htmlFor="schedule-repeat">When</label>
+          <select id="schedule-repeat" value={repeat} onChange={(event) => setRepeat(event.target.value as ScheduleRule["repeat"])}>
+            {Object.entries(REPEAT_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="schedule-time">At</label>
+          <input id="schedule-time" type="time" required value={time} onChange={(event) => setTime(event.target.value)} />
+        </div>
+      </div>
+      {repeat === "once" && (
+        <div className="field">
+          <label htmlFor="schedule-date">On</label>
+          <input id="schedule-date" type="date" required value={date} onChange={(event) => setDate(event.target.value)} />
+        </div>
+      )}
+      {repeat === "weekly" && (
+        <fieldset className="field day-picker">
+          <legend>On</legend>
+          <div className="day-chips">
+            {DAY_NAMES.map((name, day) => (
+              <label key={name} className={`day-chip${days.includes(day) ? " on" : ""}`}>
+                <input
+                  type="checkbox"
+                  checked={days.includes(day)}
+                  onChange={(event) =>
+                    setDays(event.target.checked ? [...days, day].sort((a, b) => a - b) : days.filter((each) => each !== day))
+                  }
+                />
+                {name}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
+      {repeat === "monthly" && (
+        <div className="field">
+          <label htmlFor="schedule-day">On day</label>
+          <input
+            id="schedule-day"
+            type="number"
+            min={1}
+            max={31}
+            required
+            value={dayOfMonth}
+            onChange={(event) => setDayOfMonth(Number(event.target.value))}
+          />
+        </div>
+      )}
+      <p className="muted small">Times are on {timeZone} time.</p>
+      {error && (
+        <p className="alert" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="actions">
+        <button type="submit" className="button primary small" disabled={saving || !task.trim()}>
+          {saving ? "Saving…" : initial ? "Save" : "Set schedule"}
+        </button>
+        <button type="button" className="button secondary small" onClick={onCancel}>
+          Cancel
+        </button>
       </div>
     </form>
   );

@@ -1,6 +1,7 @@
 import type { TaskEvent } from "./driver.ts";
 import type { ChatMessage, ConversationItem, FunctionTool, ModelAdapter, ThinkingEffort, ToolCall } from "./models/adapter.ts";
 import type { Note, Notebook } from "./notes.ts";
+import type { ScheduleBook } from "./schedules.ts";
 import type { SkillSummary } from "./skills.ts";
 
 /** The most model calls one Task makes before it stops. */
@@ -69,6 +70,38 @@ const NOTE_TOOLS: FunctionTool[] = [
   },
 ];
 
+/** The Bot's hand on its schedules: tasks it does on its own later, once or repeating. */
+const SCHEDULE_TOOLS: FunctionTool[] = [
+  {
+    name: "schedule_task",
+    description:
+      "Sets a schedule, when the Customer asks you to do something later or regularly: at each time, you do the task " +
+      "as if they had just asked, and your reply goes to them. Times are on the Customer's clock.",
+    parameters: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "What to do each time, written as the Customer would ask it." },
+        repeat: { type: "string", enum: ["once", "daily", "weekdays", "weekly", "monthly"] },
+        time: { type: "string", description: "The time of day, HH:MM, 24-hour." },
+        date: { type: "string", description: "For once: the date, YYYY-MM-DD." },
+        days: { type: "array", items: { type: "integer" }, description: "For weekly: the days, 0 for Sunday to 6 for Saturday." },
+        day_of_month: { type: "integer", description: "For monthly: the day of the month, 1 to 31." },
+      },
+      required: ["task", "repeat", "time"],
+    },
+  },
+  {
+    name: "list_schedules",
+    description: "Lists your schedules: what each does, when, and when it next runs.",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "cancel_schedule",
+    description: "Deletes one of your schedules, by its id, when the Customer asks you to stop it.",
+    parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+  },
+];
+
 export interface TaskTools {
   /** Present when the Bot can drive its Computer: carries out a task there and returns the Driver model's report. */
   useComputer?: (task: string) => AsyncGenerator<TaskEvent, string>;
@@ -76,6 +109,8 @@ export interface TaskTools {
   skills?: { list: SkillSummary[]; read: (name: string) => Promise<string | null> };
   /** The Bot's notes as the Task starts, and its hand on them. */
   notes?: { list: Array<Pick<Note, "id" | "content">>; book: Notebook };
+  /** The Bot's hand on its schedules. */
+  schedules?: ScheduleBook;
 }
 
 /** What a Task has read so far: once it reads Outside content, what it writes down is marked for the Customer to check. */
@@ -109,6 +144,7 @@ export async function* runTask(
     ...(task.tools?.useComputer ? [USE_COMPUTER] : []),
     ...(skills.length > 0 ? [readSkillTool(skills.map((skill) => skill.name))] : []),
     ...(task.tools?.notes ? NOTE_TOOLS : []),
+    ...(task.tools?.schedules ? SCHEDULE_TOOLS : []),
   ];
   const tools = offered.length > 0 ? offered : undefined;
   const instructions = botInstructions({
@@ -118,7 +154,9 @@ export async function* runTask(
     skills,
     notes: task.tools?.notes?.list,
   });
-  const state: TaskState = { readOutsideContent: false };
+  // A Task that may search the web has read Outside content from its first call: the pages a
+  // search reads reach the model whether or not its reply cites them.
+  const state: TaskState = { readOutsideContent: task.webSearch === true };
   const conversation: ConversationItem[] = [...task.conversation];
   for (let step = 0; step < MAX_TASK_STEPS; step += 1) {
     const calls: ToolCall[] = [];
@@ -157,7 +195,7 @@ export async function* runTask(
 
 /** Runs one tool call. */
 async function* runTool(call: ToolCall, task: { botName: string; tools?: TaskTools }, state: TaskState): AsyncGenerator<TaskEvent, string> {
-  const { useComputer, skills, notes } = task.tools ?? {};
+  const { useComputer, skills, notes, schedules } = task.tools ?? {};
   if (call.name === USE_COMPUTER.name && useComputer) {
     // Whatever the Computer showed the Driver model is Outside content.
     state.readOutsideContent = true;
@@ -165,7 +203,30 @@ async function* runTool(call: ToolCall, task: { botName: string; tools?: TaskToo
   }
   if (call.name === "read_skill" && skills) return yield* readSkill(call, task.botName, skills);
   if (notes && NOTE_TOOLS.some((tool) => tool.name === call.name)) return yield* writeNote(call, task.botName, notes.book, state);
+  if (schedules && SCHEDULE_TOOLS.some((tool) => tool.name === call.name)) return yield* useSchedules(call, task.botName, schedules, state);
   return `There is no tool called ${call.name}.`;
+}
+
+/**
+ * Sets, lists or cancels the Bot's schedules. A schedule spends on its own, every time, so
+ * none is set once the Task has read Outside content: a page can't plant one.
+ */
+async function* useSchedules(call: ToolCall, botName: string, book: ScheduleBook, state: TaskState): AsyncGenerator<TaskEvent, string> {
+  if (call.name === "list_schedules") return await book.list();
+  if (call.name === "cancel_schedule") {
+    const { done, answer } = await book.cancel(typeof call.input.id === "string" ? call.input.id.trim() : "");
+    if (done) yield { type: "status", text: `${botName} cancelled a schedule.` };
+    return answer;
+  }
+  if (state.readOutsideContent) {
+    return (
+      "You can't set a schedule in a Task that has read outside content, such as web pages, a connected tool's results " +
+      "or your Computer's screen. Ask the Customer to set it in a new message, or on your page."
+    );
+  }
+  const { done, answer } = await book.set(call.input);
+  if (done) yield { type: "status", text: `${botName} set a schedule.` };
+  return answer;
 }
 
 /** Adds, changes or forgets one of the Bot's notes, as the model asked. */

@@ -12,7 +12,7 @@ import {
 } from "react";
 import { api, ApiError, type Attachment, type Bot, errorMessage, type Message, type ModelCatalog, type WebSource } from "./api.ts";
 import { BotAvatar } from "./BotAvatar.tsx";
-import { BulbIcon, CheckIcon, CloseIcon, CopyIcon, FileIcon, GlobeIcon, PaperclipIcon, SendIcon } from "./Icons.tsx";
+import { BulbIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, FileIcon, GlobeIcon, PaperclipIcon, SendIcon } from "./Icons.tsx";
 import { modelLabel } from "./ModelPicker.tsx";
 
 // The Markdown renderer loads with the first Bot page, not with sign-in; until then a reply shows as plain text.
@@ -21,6 +21,8 @@ const Markdown = lazy(() => import("./Markdown.tsx").then(({ Markdown }) => ({ d
 // The API's limits (apps/api/src/attachments.ts), checked here first so a too-big Attachment is
 // caught before it's read. The API decides by the file's bytes; here, by its type and name.
 const MAX_FILES = 5;
+/** How often an open, idle Conversation looks for replies it didn't ask for, such as a schedule's. */
+const NEW_MESSAGES_POLL_MS = 15_000;
 const MB = 1024 * 1024;
 const MAX_TOTAL_BYTES = 12 * MB;
 const limitFor = (file: File): { bytes: number; label: string } =>
@@ -97,6 +99,24 @@ export function Conversation({
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
   }, [messages, streaming]);
+
+  // Replies the page didn't ask for, such as a schedule's, arrive while it's open: it looks for
+  // them every so often while it isn't sending, and only while it's on screen.
+  const lastSaved = messages?.findLast((message) => /^\d+$/.test(message.id))?.id ?? null;
+  const idle = messages !== null && streaming === null;
+  useEffect(() => {
+    if (!idle) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      api.messages(bot.id).then(
+        ({ messages: saved }) => {
+          if (saved.at(-1)?.id !== lastSaved) onMessages(() => saved);
+        },
+        () => {},
+      );
+    }, NEW_MESSAGES_POLL_MS);
+    return () => clearInterval(timer);
+  }, [bot.id, idle, lastSaved, onMessages]);
 
   // The box grows with what's typed, up to a limit, then scrolls.
   useLayoutEffect(() => {
@@ -410,6 +430,18 @@ export function Conversation({
 /** One of the Customer's messages: its files, then its words. */
 function UserMessage({ bot, message }: { bot: Bot; message: Message }) {
   const files = message.attachments ?? [];
+  // A schedule's firing sent it, not the Customer: shown as the task it is.
+  if (message.scheduleId !== undefined && message.scheduleId !== null) {
+    return (
+      <div className="message scheduled">
+        <span className="scheduled-label">
+          <ClockIcon size={14} />
+          Scheduled task
+        </span>
+        <div className="scheduled-text">{message.content}</div>
+      </div>
+    );
+  }
   return (
     <div className="message user">
       {files.length > 0 && (

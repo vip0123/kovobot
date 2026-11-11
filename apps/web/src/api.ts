@@ -45,8 +45,38 @@ export interface Message {
   searchSuggestions?: string | null;
   /** Files sent with this message. */
   attachments?: Attachment[];
+  /** The schedule whose firing sent this message, rather than the Customer. */
+  scheduleId?: string | null;
   createdAt: string;
 }
+
+/** When a schedule runs, on its time zone's clock. */
+export interface ScheduleRule {
+  repeat: "once" | "daily" | "weekdays" | "weekly" | "monthly";
+  /** "HH:MM" */
+  time: string;
+  /** For once: "YYYY-MM-DD". */
+  date?: string;
+  /** For weekly: 0 is Sunday, 6 Saturday. */
+  days?: number[];
+  /** For monthly: 1 to 31; a month without the day runs on its last. */
+  dayOfMonth?: number;
+}
+
+/** A task a Bot does on its own, once or repeating. */
+export interface Schedule {
+  id: string;
+  task: string;
+  when: ScheduleRule;
+  timeZone: string;
+  enabled: boolean;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  createdBy: "customer" | "bot";
+}
+
+/** The browser's time zone, which the Bot's sense of "now" and "9am" follows. */
+export const BROWSER_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 export interface WebSource {
   url: string;
@@ -203,6 +233,13 @@ export const api = {
   updateSkill: (id: string, change: Partial<SkillFields>) =>
     request<{ skill: Skill }>(`/skills/${id}`, { method: "PATCH", json: change }),
   deleteSkill: (id: string) => request<unknown>(`/skills/${id}`, { method: "DELETE" }),
+  schedules: (botId: string) => request<{ schedules: Schedule[] }>(`/bots/${botId}/schedules`),
+  addSchedule: (botId: string, schedule: { task: string; when: ScheduleRule; timeZone: string }) =>
+    request<{ schedule: Schedule }>(`/bots/${botId}/schedules`, { method: "POST", json: schedule }),
+  changeSchedule: (botId: string, id: string, change: { task?: string; when?: ScheduleRule; timeZone?: string; enabled?: boolean }) =>
+    request<{ schedule: Schedule }>(`/bots/${botId}/schedules/${id}`, { method: "PATCH", json: change }),
+  deleteSchedule: (botId: string, id: string) => request<unknown>(`/bots/${botId}/schedules/${id}`, { method: "DELETE" }),
+
   notes: (botId: string) => request<{ notes: Note[] }>(`/bots/${botId}/notes`),
   addNote: (botId: string, content: string) => request<{ note: Note }>(`/bots/${botId}/notes`, { method: "POST", json: { content } }),
   editNote: (botId: string, id: string, content: string) =>
@@ -241,7 +278,10 @@ export const api = {
    */
   async sendMessage(botId: string, content: string, options: MessageOptions, handlers: ReplyHandlers): Promise<Message> {
     const { onSent = () => {}, onText, onStatus = () => {}, onThinking = () => {}, onSources = () => {} } = handlers;
-    const response = await send(`/bots/${botId}/messages`, { method: "POST", json: { content, ...options } });
+    const response = await send(`/bots/${botId}/messages`, {
+      method: "POST",
+      json: { content, ...options, timeZone: BROWSER_TIME_ZONE },
+    });
     const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
     let buffer = "";
     for (;;) {

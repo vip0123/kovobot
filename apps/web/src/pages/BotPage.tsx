@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api, ApiError, type Bot, type Computer, errorMessage, type Message, type ModelCatalog } from "../api.ts";
 import { AppShell, PageHeader, useShell } from "../AppShell.tsx";
@@ -43,6 +43,7 @@ function BotChat({ id }: { id: string }) {
   const bot = bots.find((candidate) => candidate.id === id);
   const exists = bot !== undefined;
   const [messages, setMessages] = useState<Message[] | null>(null);
+  const updateMessages = useCallback((update: (messages: Message[]) => Message[]) => setMessages((current) => update(current ?? [])), []);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [computer, setComputer] = useState<ComputerState>(undefined);
   const [drawer, setDrawer] = useState<Drawer | null>(null);
@@ -96,7 +97,7 @@ function BotChat({ id }: { id: string }) {
           catalog={catalog}
           messages={messages}
           loadError={loadError}
-          onMessages={(update) => setMessages((current) => update(current ?? []))}
+          onMessages={updateMessages}
           canUseComputer={Boolean(computer && computer !== "off" && bot.driverModel)}
         />
         {drawer === "computer" && computer !== undefined && computer !== "off" && (

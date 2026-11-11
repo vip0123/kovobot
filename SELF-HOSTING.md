@@ -130,8 +130,9 @@ A Computer is a Linux desktop with Firefox that one Bot has. The Bot uses it thr
   ```
 
 - **Restarts.** Both containers start again after a reboot, unless you stopped them with `docker compose stop` or `down`.
+- **Schedules** run while Kovobot runs. One that came due while it was stopped runs once when it starts again, not once for every time it missed. Their times follow the time zone of the browser that set them.
 - **Logs.** Run `docker compose logs -f kovobot`. Warnings at start-up name any setting that needs fixing.
 
 ## What's not here yet
 
-Self-hosted Kovobot does what the hosted service does today: Bots with their own instructions, Skills and notes, models and web chat, plus Linux Computers that Bots drive and you watch and take over. Telegram, Discord and Slack, MCP tools and schedules are on the [roadmap](README.md#roadmap).
+Self-hosted Kovobot does what the hosted service does today: Bots with their own instructions, Skills, notes and schedules, models and web chat, plus Linux Computers that Bots drive and you watch and take over. Telegram, Discord and Slack, and MCP tools are on the [roadmap](README.md#roadmap).

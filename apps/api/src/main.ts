@@ -6,8 +6,10 @@ import { createComputerServiceClient } from "./computers.ts";
 import { configOrExit } from "./config-or-exit.ts";
 import { createMailer } from "./mailer.ts";
 import { SLEEP_SWEEP_MS, sleepIdleComputers } from "./computer-sleep.ts";
+import { fireDueSchedules } from "./firings.ts";
 import { liveViewUpgrade } from "./live-view.ts";
 import { createModelAdapters } from "./models/adapters.ts";
+import { FIRING_SWEEP_MS } from "./schedules.ts";
 
 // Node gives each of a host's addresses 250 ms to connect before abandoning it for the next.
 // On a slow link without IPv6 that failed one new connection to a Model provider in five, and
@@ -34,6 +36,15 @@ const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
 });
 // A Computer's live view arrives as a WebSocket, which Hono's handlers don't take.
 server.on("upgrade", liveViewUpgrade(app, deps));
+// Schedules that are due run, one sweep at a time: a sweep still running when the next is due skips it.
+let firing = false;
+setInterval(() => {
+  if (firing) return;
+  firing = true;
+  void fireDueSchedules(deps)
+    .catch((error: unknown) => console.error(error))
+    .finally(() => (firing = false));
+}, FIRING_SWEEP_MS).unref();
 // Computers with nothing going on go Asleep, and are Shut down after 30 days Asleep.
 if (deps.computers) {
   setInterval(() => void sleepIdleComputers(deps).catch((error: unknown) => console.error(error)), SLEEP_SWEEP_MS).unref();
