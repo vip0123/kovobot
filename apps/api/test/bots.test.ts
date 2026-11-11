@@ -413,10 +413,18 @@ describe("keeping a conversation sound", () => {
 
       const first = browser.post(`/api/bots/${bot.id}/messages`, { content: "First?" });
       await server.openai.waitForRequests(before + 1);
+      // Each renewal is a write to the database: wait for it to land, however busy the machine is.
+      const renewed = async () => {
+        const { rows } = await server.deps.db.query<{ since: Date | null }>(
+          "SELECT replying_since AS since FROM conversations WHERE bot_id = $1 AND channel = 'web'",
+          [bot.id],
+        );
+        return rows[0]?.since?.getTime() === server.clock.now.getTime();
+      };
       for (let minute = 1; minute <= 12; minute++) {
         server.clock.advanceMinutes(1);
         await vi.advanceTimersByTimeAsync(60_000);
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        while (!(await renewed())) await new Promise((resolve) => setTimeout(resolve, 10));
       }
       const second = await browser.post(`/api/bots/${bot.id}/messages`, { content: "Second?" });
       expect(second.status).toBe(409);

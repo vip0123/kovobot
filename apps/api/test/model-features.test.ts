@@ -143,7 +143,12 @@ describe("web search", () => {
     // The version that cites what it uses: the newer ones filter results with code and cite nothing.
     expect(anthropic.requests.at(-1)!.body.tools).toEqual([{ type: "web_search_20250305", name: "web_search", max_uses: 5 }]);
     expect(textOf(seen)).toBe("Node 26 is current.");
-    expect(sourcesOf(seen)).toEqual({ type: "sources", sources: SOURCES });
+    // What it cites is shown; everything its searches found may be read by a researching model.
+    expect(sourcesOf(seen)).toEqual({
+      type: "sources",
+      sources: SOURCES,
+      found: [...SOURCES, { url: "https://example.com/unrelated", title: "Unrelated" }],
+    });
 
     await events(adapter, { model: "claude-sonnet-5-5" });
     expect(anthropic.requests.at(-1)!.body).not.toHaveProperty("tools");

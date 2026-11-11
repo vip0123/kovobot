@@ -166,6 +166,8 @@ export interface MessageOptions {
   attachments?: OutgoingFile[];
   thinkHarder?: boolean;
   webSearch?: boolean;
+  /** Deep research: the Bot searches and reads in rounds, then writes a report. */
+  research?: boolean;
 }
 
 /** What the Bot does while it replies, as it streams. */

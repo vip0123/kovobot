@@ -63,8 +63,9 @@ export function createOpenAIAdapter({
                   ...(webSearch ? [{ type: "web_search" as const }] : []),
                 ],
                 ...(webSearch ? { max_tool_calls: MAX_SEARCHES_PER_CALL } : {}),
-                // Not stored at OpenAI, so reasoning comes back encrypted for the Task to replay.
-                include: ["reasoning.encrypted_content" as const],
+                // Not stored at OpenAI, so reasoning comes back encrypted for the Task to replay; and
+                // every page a search found, which a researching model may read.
+                include: ["reasoning.encrypted_content" as const, ...(webSearch ? ["web_search_call.action.sources" as const] : [])],
               }
             : {}),
         } as OpenAI.Responses.ResponseCreateParamsStreaming);
@@ -88,7 +89,8 @@ export function createOpenAIAdapter({
             case "response.completed": {
               const output = event.response.output;
               const sources = webSources(output);
-              if (sources.length > 0) yield { type: "sources", sources };
+              const found = searchResults(output);
+              if (sources.length > 0 || found.length > 0) yield { type: "sources", sources, ...(found.length > 0 ? { found } : {}) };
               yield* calls(output);
               const usage = event.response.usage;
               if (!usage) {
@@ -212,6 +214,17 @@ function webSources(output: ResponseOutputItem[]): WebSource[] {
         if (annotation.type === "url_citation") pages.push({ url: annotation.url, title: annotation.title || annotation.url });
       }
     }
+  }
+  return uniquePages(pages);
+}
+
+/** Every page the answer's searches found, each once: OpenAI lists them only by address. */
+function searchResults(output: ResponseOutputItem[]): WebSource[] {
+  const pages: WebSource[] = [];
+  for (const item of output) {
+    if (item.type !== "web_search_call") continue;
+    const action = (item as { action?: { sources?: Array<{ type?: string; url?: string }> } }).action;
+    for (const source of action?.sources ?? []) if (source.url) pages.push({ url: source.url, title: source.url });
   }
   return uniquePages(pages);
 }

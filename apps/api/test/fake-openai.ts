@@ -38,9 +38,19 @@ export class FakeOpenAI {
   private thoughts: string[] = [];
   private sources: Array<{ url: string; title: string }> = [];
 
+  private turns: QueuedTurn[] = [];
+
   /** The next reply's output also carries these items, such as a function_call or a computer_call. */
   addOutput(...items: object[]): void {
     this.extraOutput = items;
+  }
+
+  /**
+   * The next requests get these answers, one each, in order: its text, any more output items,
+   * and the pages it cites. Once they're used up, replies are as set by the other methods.
+   */
+  queueTurns(...turns: QueuedTurn[]): void {
+    this.turns = turns;
   }
 
   /** The next reply first streams these pieces of its reasoning summary. */
@@ -101,11 +111,14 @@ export class FakeOpenAI {
     }
     const body = JSON.parse(await readBody(request)) as ResponsesRequest;
     this.requests.push(body);
-    const next = this.next;
-    const extraOutput = this.extraOutput;
+    const queued = this.turns.shift();
+    const next = queued ? { kind: "reply" as const, deltas: queued.text ? [queued.text] : [] } : this.next;
+    const extraOutput = queued ? (queued.output ?? []) : this.extraOutput;
     this.extraOutput = [];
     const thoughts = this.thoughts;
-    const sources = this.sources;
+    const sources = queued ? (queued.sources ?? []) : this.sources;
+    // The pages its search found, as OpenAI lists them when asked: by address only.
+    const found = (queued?.found ?? []).map((url) => ({ type: "url", url }));
     this.thoughts = [];
     this.sources = [];
     const gate = this.gate;
@@ -147,7 +160,9 @@ export class FakeOpenAI {
           ...(thoughts.length > 0
             ? [{ type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: thoughts.join("") }], encrypted_content: "fake" }]
             : []),
-          ...(sources.length > 0 ? [{ type: "web_search_call", id: "ws_1", status: "completed", action: { type: "search", query: "fake query" } }] : []),
+          ...(sources.length > 0 || found.length > 0
+            ? [{ type: "web_search_call", id: "ws_1", status: "completed", action: { type: "search", query: "fake query", ...(found.length > 0 ? { sources: found } : {}) } }]
+            : []),
           {
             type: "message",
             id: "msg_1",
@@ -175,6 +190,14 @@ export class FakeOpenAI {
     });
     response.end();
   }
+}
+
+/** One answer the fake gives in turn: its text, more output items, the pages it cites, and the pages its search found. */
+interface QueuedTurn {
+  text?: string;
+  output?: object[];
+  sources?: Array<{ url: string; title: string }>;
+  found?: string[];
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {

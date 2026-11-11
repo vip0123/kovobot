@@ -138,6 +138,10 @@ _Avoid_: computer-use model
 The work a Bot does for one incoming message or one schedule firing, until it replies or stops.
 _Avoid_: job, run, turn
 
+**Deep research**:
+A Task a message asks for that searches the web and reads pages in full, in rounds, within a set number of model calls and minutes, then writes a report with its sources. The report is the reply, and is also kept as a Markdown file. It only reads.
+_Avoid_: research mode, agentic search
+
 **Schedule**:
 A task a Bot does on its own at set times: once, every day, on weekdays, on chosen days of the week or once a month, on the clock of a time zone. The Customer sets one on the Bot's page, or asks the Bot to. Each firing is one Task, and its reply goes into the Bot's Conversation.
 _Avoid_: cron, job, automation, reminder (for the schedule itself)

@@ -136,7 +136,7 @@ export function createAnthropicAdapter({
       if (stopReason === "refusal") throw new ModelError("The model declined to answer.", { usage });
       if (stopReason === null) throw new ModelError("Anthropic's reply was cut off.");
       const sources = webSources(content);
-      if (sources.length > 0) yield { type: "sources", sources };
+      if (sources.length > 0) yield { type: "sources", sources, found: searchResults(content) };
       yield* calls(content);
       // A long turn with server tools (web search) can pause; the Task sends it back to carry on.
       yield { type: "done", usage, turn: content, ...(stopReason === "pause_turn" ? { paused: true } : {}) };
@@ -162,6 +162,15 @@ function webSources(content: BetaContentBlock[]): WebSource[] {
     }
   }
   return cited.length > 0 ? uniquePages(cited) : uniquePages(found).slice(0, UNCITED_RESULTS_SHOWN);
+}
+
+/** Every page the answer's searches found, each once. */
+function searchResults(content: BetaContentBlock[]): WebSource[] {
+  return uniquePages(
+    content.flatMap((block) =>
+      block.type === "web_search_tool_result" && Array.isArray(block.content) ? block.content.map((result) => ({ url: result.url, title: result.title })) : [],
+    ),
+  );
 }
 
 /** The model's calls in its answer: our function tools' calls, and its turn on the Computer. */
