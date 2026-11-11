@@ -255,3 +255,29 @@ describe("Connected apps", () => {
     expect(warnings).toContainEqual(expect.stringMatching(/^COMPOSIO_API_KEY looks like a Composio Connect consumer key \(ck_/));
   });
 });
+
+describe("local MCP servers", () => {
+  const servers = { pantry: { command: "node", args: ["pantry.js"], env: { PANTRY: "corner" } } };
+
+  test("are the Operator's list, self-hosted only, in Claude Desktop's mcpServers form or as a plain map", () => {
+    expect(loadConfig({}).config.localMcpServers).toEqual({});
+    const expected = { pantry: { command: "node", args: ["pantry.js"], env: { PANTRY: "corner" } } };
+    expect(loadConfig({ MCP_LOCAL_SERVERS: JSON.stringify(servers) }).config.localMcpServers).toEqual(expected);
+    expect(loadConfig({ MCP_LOCAL_SERVERS: JSON.stringify({ mcpServers: { pantry: { command: "node" } } }) }).config.localMcpServers).toEqual({
+      pantry: { command: "node", args: [], env: {} },
+    });
+  });
+
+  test("the hosted service never runs a program it is given, and a list that isn't one is refused", () => {
+    expect(configProblems({ ...hostedEnv, MCP_LOCAL_SERVERS: JSON.stringify(servers) })).toEqual([
+      expect.stringMatching(/^MCP_LOCAL_SERVERS is for self-hosted installs only/),
+    ]);
+    expect(configProblems({ MCP_LOCAL_SERVERS: "{not json" })).toEqual([expect.stringMatching(/^MCP_LOCAL_SERVERS must be JSON/)]);
+    expect(configProblems({ MCP_LOCAL_SERVERS: JSON.stringify({ "bad name!": { command: "node" } }) })).toEqual([
+      expect.stringMatching(/^MCP_LOCAL_SERVERS: "bad name!" isn't a name/),
+    ]);
+    expect(configProblems({ MCP_LOCAL_SERVERS: JSON.stringify({ pantry: { args: ["x"] } }) })).toEqual([
+      expect.stringMatching(/^MCP_LOCAL_SERVERS: pantry needs a command/),
+    ]);
+  });
+});

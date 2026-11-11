@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { FAKE_MCP_ACCESS_TOKEN, FakeMcpServer, FakeSessionMcpServer } from "./fake-mcp.ts";
 import { type Browser, serverSentEvents, startTestServer, uniqueEmail } from "./harness.ts";
@@ -222,5 +223,45 @@ describe("MCP servers, hosted", () => {
         error: { code: "invalid_mcp_url", message: "Connect an MCP server at a public https address." },
       });
     }
+  });
+});
+
+describe("local MCP servers, self-hosted", () => {
+  // The Operator's list: the stand-in pantry server, a program Node runs as a child.
+  const local = startTestServer({
+    MCP_LOCAL_SERVERS: JSON.stringify({
+      pantry: { command: process.execPath, args: [fileURLToPath(new URL("./fake-stdio-mcp.ts", import.meta.url))], env: { PANTRY: "corner" } },
+    }),
+  });
+
+  test("a Customer picks one from the Operator's list for a Bot, which runs it with none of Kovobot's own settings", async () => {
+    // Something of the Bot service's own that a local server mustn't see.
+    process.env.KOVOBOT_TEST_SECRET = "do-not-share";
+    const { browser, bot } = await signedInBot(local);
+    expect(await (await browser.get(`/api/bots/${bot.id}/mcp-servers`)).json()).toEqual({ servers: [], localServers: ["pantry"] });
+
+    const added = await browser.post(`/api/bots/${bot.id}/mcp-servers`, { local: "pantry" });
+    expect(added.status).toBe(201);
+    expect(await added.json()).toMatchObject({
+      server: { url: "local:pantry", name: "Pantry", state: "connected", tools: [{ name: "count_flour", kind: "read" }] },
+    });
+
+    local.openai.addOutput({ type: "function_call", id: "fc_flour", call_id: "call_flour", name: "pantry__count_flour", arguments: "{}", status: "completed" });
+    local.openai.replyWith("Twelve bags.");
+    await serverSentEvents(await browser.post(`/api/bots/${bot.id}/messages`, { content: "How much flour?" }));
+    expect(local.openai.requests.at(-1)!.input.at(-1)).toMatchObject({ output: "12 bags in the corner pantry. Secret seen: no." });
+
+    // Only what's on the list runs; and a second add of the same one is refused.
+    const unlisted = await browser.post(`/api/bots/${bot.id}/mcp-servers`, { local: "shell" });
+    expect(unlisted.status).toBe(400);
+    expect(await unlisted.json()).toEqual({ error: { code: "invalid_mcp_url", message: "There's no local MCP server called shell here." } });
+    expect((await browser.post(`/api/bots/${bot.id}/mcp-servers`, { local: "pantry" })).status).toBe(409);
+    delete process.env.KOVOBOT_TEST_SECRET;
+  }, 45_000);
+
+  test("with no list from the Operator, there are none to pick", async () => {
+    const { browser, bot } = await signedInBot();
+    expect(((await (await browser.get(`/api/bots/${bot.id}/mcp-servers`)).json()) as { localServers: string[] }).localServers).toEqual([]);
+    expect((await browser.post(`/api/bots/${bot.id}/mcp-servers`, { local: "pantry" })).status).toBe(400);
   });
 });

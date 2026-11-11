@@ -58,6 +58,19 @@ export interface Config {
    * hosts each app's sign-in and holds its tokens (ADR 0010). Null leaves Connected apps off.
    */
   composio: { apiKey: string } | null;
+  /**
+   * Local (stdio) MCP servers the Operator lets Bots use, by name: programs this machine runs.
+   * Self-hosted only, and only from this list: a Customer picks one, never types a command.
+   */
+  localMcpServers: Record<string, LocalMcpServer>;
+}
+
+/** A program that is an MCP server over stdio, as the Operator set it up. */
+export interface LocalMcpServer {
+  command: string;
+  args: string[];
+  /** Added to the few safe variables it inherits; it never sees this server's own settings. */
+  env: Record<string, string>;
 }
 
 /** How the Bot service reaches the Computer service, its only client (ADR 0001). */
@@ -261,7 +274,16 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
     computerService: null,
     sweepKey: null,
     composio: null,
+    localMcpServers: {},
   };
+  const localServers = read("MCP_LOCAL_SERVERS");
+  if (localServers && hosted) {
+    problems.push("MCP_LOCAL_SERVERS is for self-hosted installs only: the hosted service never runs a program it is given.");
+  } else if (localServers) {
+    const listed = readLocalMcpServers(localServers);
+    if ("problem" in listed) problems.push(`MCP_LOCAL_SERVERS${listed.problem}`);
+    else config.localMcpServers = listed.servers;
+  }
   const composioKey = read("COMPOSIO_API_KEY");
   if (composioKey) {
     config.composio = { apiKey: composioKey };
@@ -308,6 +330,33 @@ export function loadConfig(env: Env): { config: Config; warnings: string[] } {
 
   if (problems.length > 0) throw new ConfigError(problems);
   return { config, warnings };
+}
+
+/**
+ * The Operator's local MCP servers from JSON: Claude Desktop's { "mcpServers": { name: { command,
+ * args, env } } }, or the map inside it. A problem starts with what follows the setting's name.
+ */
+function readLocalMcpServers(text: string): { servers: Record<string, LocalMcpServer> } | { problem: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { problem: ' must be JSON, such as {"time": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-time"]}}.' };
+  }
+  const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+  const map = isObject(parsed) && isObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
+  if (!isObject(map)) return { problem: " must be an object of servers by name." };
+  const servers: Record<string, LocalMcpServer> = {};
+  for (const [name, entry] of Object.entries(map)) {
+    if (!/^[a-z0-9][a-z0-9_-]{0,39}$/i.test(name)) return { problem: `: "${name}" isn't a name: letters, digits, - and _, up to 40.` };
+    if (!isObject(entry) || typeof entry.command !== "string" || !entry.command.trim()) return { problem: `: ${name} needs a command.` };
+    const args = entry.args ?? [];
+    const env = entry.env ?? {};
+    if (!Array.isArray(args) || !args.every((arg) => typeof arg === "string")) return { problem: `: ${name}'s args must be a list of strings.` };
+    if (!isObject(env) || !Object.values(env).every((value) => typeof value === "string")) return { problem: `: ${name}'s env must map names to strings.` };
+    servers[name] = { command: entry.command, args, env: env as Record<string, string> };
+  }
+  return { servers };
 }
 
 export interface ComputerServiceConfig {

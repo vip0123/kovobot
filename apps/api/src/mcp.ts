@@ -12,8 +12,10 @@ import {
   type StoredOAuthClientInformation,
   type StoredOAuthTokens,
   StreamableHTTPClientTransport,
+  type Transport,
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
+import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { type ActionKind, actionKind, type ActionOutcome, type ActionTool, type ConnectedTool } from "./actions.ts";
 import type { AppDeps } from "./app.ts";
 import { type Customer, ownBotOnly } from "./customers.ts";
@@ -63,6 +65,26 @@ export interface McpServerView {
 
 
 /** The way to a server; hosted, every request and redirect goes only to public addresses. */
+/** A local server's stored address: the name the Operator gave it, after this. */
+const LOCAL = "local:";
+
+/**
+ * The way to a server: a program on this machine, started for the call, for one of the
+ * Operator's local servers; else over HTTP. A local server inherits only the few variables MCP
+ * deems safe, plus those the Operator gave it, never this server's own settings and keys.
+ */
+function connectionTo(deps: AppDeps, server: StoredServer, auth: StoredOAuth): Transport {
+  if (!server.url.startsWith(LOCAL)) return transportTo(deps, server, auth);
+  const listed = deps.config.localMcpServers[server.url.slice(LOCAL.length)];
+  if (!listed) throw new Error("That local MCP server isn't set up here any more.");
+  return new StdioClientTransport({ command: listed.command, args: listed.args, env: { ...getDefaultEnvironment(), ...listed.env }, stderr: "ignore" });
+}
+
+/** A server's name as the Customer knows it: its own, else its local name or host. */
+function serverLabel(server: Pick<StoredServer, "url" | "name">): string {
+  return server.name ?? (server.url.startsWith(LOCAL) ? server.url.slice(LOCAL.length) : new URL(server.url).hostname);
+}
+
 function transportTo(deps: AppDeps, server: StoredServer, auth: StoredOAuth): StreamableHTTPClientTransport {
   return new StreamableHTTPClientTransport(new URL(server.url), {
     authProvider: auth,
@@ -89,14 +111,15 @@ export function mcpRoutes(deps: AppDeps) {
   routes.get("/bots/:id/mcp-servers", async (c) => {
     const botId = c.get("botId");
     const { rows } = await deps.db.query<StoredServer>(`SELECT ${SERVER_COLUMNS} FROM mcp_servers WHERE bot_id = $1 ORDER BY created_at, id`, [botId]);
-    return c.json({ servers: rows.map((server) => view(server)) });
+    return c.json({ servers: rows.map((server) => view(server)), localServers: Object.keys(deps.config.localMcpServers) });
   });
 
   // Connects a server: at once if it lets Kovobot in, else it answers with where the Customer signs in.
   // Connecting one again that still wants signing in starts its sign-in again.
   routes.post("/bots/:id/mcp-servers", async (c) => {
     const botId = c.get("botId");
-    const url = await serverAddress(deps, (await jsonBody(c)).url);
+    const body = await jsonBody(c);
+    const url = body.local !== undefined ? localAddress(deps, body.local) : await serverAddress(deps, body.url);
     if ("error" in url) return apiError(c, 400, "invalid_mcp_url", url.error);
     const now = deps.now();
     const { rows } = await deps.db.query<StoredServer>(
@@ -167,7 +190,7 @@ export async function mcpTools(deps: AppDeps, botId: string, botName: string): P
   const tools: ConnectedTool[] = [];
   const taken = new Set<string>();
   for (const server of rows) {
-    const label = server.name ?? new URL(server.url).hostname;
+    const label = serverLabel(server);
     let prefix = slug(label);
     for (let n = 2; taken.has(prefix); n += 1) prefix = `${slug(label)}_${n}`;
     taken.add(prefix);
@@ -218,7 +241,7 @@ async function callTool(deps: AppDeps, server: StoredServer, name: string, input
   const auth = new StoredOAuth(deps, server);
   const client = new Client(CLIENT_INFO);
   try {
-    await client.connect(transportTo(deps, server, auth));
+    await client.connect(connectionTo(deps, server, auth));
     const result = (await client.callTool({ name, arguments: input })) as CallToolResult;
     return { output: toolOutput(result), failed: result.isError === true };
   } catch (error) {
@@ -251,7 +274,7 @@ async function reach(deps: AppDeps, server: StoredServer): Promise<{ server: Mcp
   const auth = new StoredOAuth(deps, server);
   const client = new Client(CLIENT_INFO);
   try {
-    await client.connect(transportTo(deps, server, auth));
+    await client.connect(connectionTo(deps, server, auth));
     const tools: McpTool[] = [];
     let cursor: string | undefined;
     do {
@@ -388,6 +411,13 @@ class StoredOAuth implements OAuthClientProvider {
  * install may reach its own network. Hosted, a public https address only: Kovobot's servers
  * never call into a private network on a Customer's say-so.
  */
+/** One of the Operator's local servers, by name: the only programs a Customer can have run. */
+function localAddress(deps: AppDeps, value: unknown): { href: string } | { error: string } {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (!Object.hasOwn(deps.config.localMcpServers, name)) return { error: `There's no local MCP server called ${name || "that"} here.` };
+  return { href: `${LOCAL}${name}` };
+}
+
 async function serverAddress(deps: AppDeps, value: unknown): Promise<URL | { error: string }> {
   let url: URL;
   try {
