@@ -162,7 +162,13 @@ export type ModelEvent =
    * The web pages the reply draws on, once, after it. Google asks apps to show its search
    * suggestions with grounded replies: `searchSuggestions` is that HTML, as Google sent it.
    */
-  | { type: "sources"; sources: WebSource[]; searchSuggestions?: string }
+  | {
+      type: "sources";
+      sources: WebSource[];
+      searchSuggestions?: string;
+      /** Every page the searches found, shown or not, where the Model provider says: a researching model may read any. */
+      found?: WebSource[];
+    }
   | { type: "tool_call"; call: ToolCall }
   | { type: "computer_call"; call: ComputerCall }
   /**

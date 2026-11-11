@@ -1115,6 +1115,14 @@ select:disabled {
   gap: 8px;
 }
 
+/* A reply's files, such as a research report or an image it made. */
+.bot-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .file-thumb img {
   display: block;
   max-width: 220px;

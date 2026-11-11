@@ -24,7 +24,7 @@ import {
   type WebSource,
 } from "./api.ts";
 import { BotAvatar } from "./BotAvatar.tsx";
-import { BulbIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, FileIcon, GlobeIcon, PaperclipIcon, SendIcon } from "./Icons.tsx";
+import { BulbIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, FileIcon, GlobeIcon, PaperclipIcon, ResearchIcon, SendIcon } from "./Icons.tsx";
 import { modelLabel } from "./ModelPicker.tsx";
 
 // The Markdown renderer loads with the first Bot page, not with sign-in; until then a reply shows as plain text.
@@ -113,6 +113,7 @@ export function Conversation({
   const [picked, setPicked] = useState<Picked[]>([]);
   const [thinkHarder, setThinkHarder] = useState(false);
   const [webSearch, setWebSearch] = useState(false);
+  const [research, setResearch] = useState(false);
   const [dragging, setDragging] = useState(false);
   // The reply being written: its text, what the model thinks first, and the pages it found.
   const [streaming, setStreaming] = useState<{ text: string; thinking: string; sources: WebSource[]; searchSuggestions?: string } | null>(
@@ -128,6 +129,8 @@ export function Conversation({
   const provider = providerOf(catalog, bot.model);
   const canSearch = (catalog.webSearch ?? []).includes(provider ?? "");
   const searching = webSearch && canSearch;
+  // Deep research searches the web in rounds, so it's offered wherever web search is.
+  const researching = research && canSearch;
   // xAI isn't sent reasoning options yet (unchecked there), so thinking deeper would do nothing.
   const canThinkHarder = provider !== "xai";
   const thinksHarder = thinkHarder && canThinkHarder;
@@ -218,7 +221,7 @@ export function Conversation({
       const saved = await api.sendMessage(
         bot.id,
         content,
-        { attachments, thinkHarder: thinksHarder, webSearch: searching },
+        { attachments, thinkHarder: thinksHarder, webSearch: searching, research: researching },
         {
           ...replyHandlers(reply),
           // The saved message replaces the one shown while sending, so its Attachments link straight away.
@@ -396,6 +399,7 @@ export function Conversation({
                   thinking={message.thinking ?? ""}
                   sources={message.sources ?? []}
                   searchSuggestions={message.searchSuggestions ?? undefined}
+                  files={message.attachments ?? []}
                 />
                 {approvals
                   .filter((approval) => approval.messageId === message.id)
@@ -465,7 +469,7 @@ export function Conversation({
             ref={box}
             rows={1}
             autoFocus
-            placeholder={`Message ${bot.name}…`}
+            placeholder={researching ? `What should ${bot.name} research?` : `Message ${bot.name}…`}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={sendOnEnter}
@@ -518,6 +522,19 @@ export function Conversation({
               >
                 <GlobeIcon size={17} />
                 <span className="toggle-label">Search the web</span>
+              </button>
+            )}
+            {canSearch && (
+              <button
+                type="button"
+                className={`toggle${research ? " on" : ""}`}
+                aria-label="Deep research"
+                aria-pressed={research}
+                title="The Bot searches and reads many pages, then writes a report with its sources. It takes a few minutes."
+                onClick={() => setResearch(!research)}
+              >
+                <ResearchIcon size={17} />
+                <span className="toggle-label">Deep research</span>
               </button>
             )}
             <button
@@ -666,29 +683,34 @@ function UserMessage({ bot, message }: { bot: Bot; message: Message }) {
   }
   return (
     <div className="message user">
-      {files.length > 0 && (
-        <div className="user-files">
-          {files.map((file, index) => {
-            const url = file.id ? api.attachmentUrl(bot.id, file.id) : undefined;
-            const image = file.mediaType.startsWith("image/");
-            if (image && (file.preview ?? url)) {
-              return (
-                <a key={file.id ?? index} href={url ?? file.preview} target="_blank" rel="noopener noreferrer" className="file-thumb">
-                  <img src={file.preview ?? url} alt={file.name} />
-                </a>
-              );
-            }
-            return (
-              <a key={file.id ?? index} href={url} download={file.name} className="file-chip">
-                <FileIcon size={16} />
-                <span className="file-chip-name">{file.name}</span>
-                <span className="file-chip-size">{formatSize(file.size)}</span>
-              </a>
-            );
-          })}
-        </div>
-      )}
+      {files.length > 0 && <MessageFiles bot={bot} files={files} className="user-files" />}
       {message.content && <div className="user-text">{message.content}</div>}
+    </div>
+  );
+}
+
+/** A message's files: images as pictures that open full size, anything else as a file to download. */
+function MessageFiles({ bot, files, className }: { bot: Bot; files: Attachment[]; className: string }) {
+  return (
+    <div className={className}>
+      {files.map((file, index) => {
+        const url = file.id ? api.attachmentUrl(bot.id, file.id) : undefined;
+        const image = file.mediaType.startsWith("image/");
+        if (image && (file.preview ?? url)) {
+          return (
+            <a key={file.id ?? index} href={url ?? file.preview} target="_blank" rel="noopener noreferrer" className="file-thumb">
+              <img src={file.preview ?? url} alt={file.name} />
+            </a>
+          );
+        }
+        return (
+          <a key={file.id ?? index} href={url} download={file.name} className="file-chip">
+            <FileIcon size={16} />
+            <span className="file-chip-name">{file.name}</span>
+            <span className="file-chip-size">{formatSize(file.size)}</span>
+          </a>
+        );
+      })}
     </div>
   );
 }
@@ -700,6 +722,7 @@ function BotMessage({
   thinking,
   sources,
   searchSuggestions,
+  files = [],
   streaming = false,
   status = null,
 }: {
@@ -708,6 +731,8 @@ function BotMessage({
   thinking: string;
   sources: WebSource[];
   searchSuggestions?: string;
+  /** Files the reply came with, such as a research report. */
+  files?: Attachment[];
   streaming?: boolean;
   status?: string | null;
 }) {
@@ -745,6 +770,7 @@ function BotMessage({
             {status}
           </span>
         )}
+        {files.length > 0 && <MessageFiles bot={bot} files={files} className="bot-files" />}
         {sources.length > 0 && <Sources sources={sources} searchSuggestions={searchSuggestions} />}
         {!streaming && text && <CopyButton text={text} />}
       </div>

@@ -217,7 +217,7 @@ export function botRoutes(deps: AppDeps) {
   routes.post("/bots/:id/messages", messageSize, async (c) => {
     const bot = await findBot(deps.db, c.get("customer").id, c.req.param("id"));
     if (!bot) return botNotFound(c);
-    const { content, thinkHarder, webSearch, attachments, timeZone } = await jsonBody(c);
+    const { content, thinkHarder, webSearch, research, attachments, timeZone } = await jsonBody(c);
     const text = typeof content === "string" ? content.trim() : "";
     const files = readAttachments(attachments);
     if ("error" in files) return apiError(c, 400, "invalid_attachments", files.error);
@@ -230,9 +230,13 @@ export function botRoutes(deps: AppDeps) {
     if (!model || !adapter) {
       return apiError(c, 503, "model_unavailable", `${model?.name ?? bot.model} isn't available here right now.`);
     }
-    const searchesTheWeb = webSearch === true;
+    // Deep research is web search in rounds, so it goes wherever web search does.
+    const researches = research === true;
+    const searchesTheWeb = webSearch === true || researches;
     if (searchesTheWeb && !webSearchProviders(deps).includes(model.provider)) {
-      return apiError(c, 400, "web_search_unavailable", `${model.name} can't search the web here. Send the message without web search.`);
+      return researches
+        ? apiError(c, 400, "research_unavailable", `${model.name} can't do deep research here, since it can't search the web.`)
+        : apiError(c, 400, "web_search_unavailable", `${model.name} can't search the web here. Send the message without web search.`);
     }
 
     const conversationId = await webConversation(deps.db, bot.id, deps.now());
@@ -260,7 +264,11 @@ export function botRoutes(deps: AppDeps) {
       await send("sent", { message: sent });
       const thinking = thinkHarder === true ? ("deep" as const) : ("normal" as const);
       const customerTimeZone = await customerClock(deps.db, c.get("customer").id, timeZone);
-      await runReply(deps, { bot, model, adapter, conversationId, thinking, webSearch: searchesTheWeb, timeZone: customerTimeZone }, send);
+      await runReply(
+        deps,
+        { bot, model, adapter, conversationId, thinking, webSearch: searchesTheWeb, research: researches, timeZone: customerTimeZone },
+        send,
+      );
     });
   });
 

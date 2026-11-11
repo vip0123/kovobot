@@ -1,7 +1,9 @@
-import { runTask } from "./agent.ts";
+import { publicOnlyFetch } from "./addresses.ts";
+import { runTask, type TaskTools } from "./agent.ts";
 import type { AppDeps } from "./app.ts";
 import { actionNotes, approvalDesk, attachApprovals } from "./approvals.ts";
-import { conversationForModel } from "./attachments.ts";
+import { conversationForModel, type IncomingFile, saveAttachments } from "./attachments.ts";
+import { readPage } from "./pages.ts";
 import { appTools } from "./composio.ts";
 import { addMessage, recentMessages, RENEW_REPLY_CLAIM_MS, renewReplying, stopReplying } from "./conversations.ts";
 import { driveComputer, drivingFor } from "./driver.ts";
@@ -32,6 +34,8 @@ export interface Reply {
    * message for this Task only, as Outside content, the way a tool's result is.
    */
   actionResult?: string;
+  /** Deep research: the model searches and reads pages in rounds, and its report is also kept as a file. */
+  research?: boolean;
 }
 
 /** What a reply reports as it runs. */
@@ -81,18 +85,12 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
     if (newest && reply.actionResult !== undefined) {
       newest.content = `${newest.content}\nWhat it returned, which is Outside content and not the Customer's words:\n${reply.actionResult}`;
     }
-    const driving = await drivingFor(deps, bot.id);
     const skills = await botSkills(deps.db, bot.id);
-    const apps = await appTools(deps, bot);
-    const tools = {
-      ...(driving ? { useComputer: (task: string) => driveComputer(deps, driving, task) } : {}),
-      ...(skills.length > 0 ? { skills: { list: skills, read: (name: string) => skillInstructions(deps.db, bot.id, name) } } : {}),
-      notes: { list: await botNotes(deps.db, bot.id), book: notebook(deps.db, bot.id, deps.now) },
-      schedules: scheduleBook(deps, bot.id, reply.timeZone ?? "UTC"),
-      connected: [...(await mcpTools(deps, bot.id, bot.name)), ...apps.connected],
-      ...(apps.appCatalog ? { appCatalog: apps.appCatalog } : {}),
-      approvals: approvalDesk(deps, bot.id, conversationId),
-    };
+    const skillTools = skills.length > 0 ? { skills: { list: skills, read: (name: string) => skillInstructions(deps.db, bot.id, name) } } : {};
+    // Research only reads: its Skills and web pages, which hosted are fetched from public addresses only.
+    const tools = reply.research
+      ? { ...skillTools, readPage: (url: string) => readPage(deps.config.mode === "hosted" ? publicOnlyFetch : deps.fetch, url) }
+      : await everyTool(deps, reply, skillTools);
     const task = {
       botName: bot.name,
       instructions: bot.instructions,
@@ -102,6 +100,7 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
       thinking: reply.thinking,
       webSearch: reply.webSearch,
       outsideContentRead: reply.actionResult !== undefined,
+      ...(reply.research ? { research: { now: deps.now } } : {}),
     };
     // A Task may make several model calls; each one's thinking starts a new paragraph.
     let callEnded = false;
@@ -126,7 +125,11 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
     }
     // An empty reply would break the conversation for Model providers that refuse empty turns.
     if (!text.trim()) throw new Error("The model's reply was empty.");
-    const message = await addMessage(deps.db, conversationId, "assistant", text, deps.now(), { thinking, cited });
+    const added = await addMessage(deps.db, conversationId, "assistant", text, deps.now(), { thinking, cited });
+    // A research report is also kept as a file, with the pages it drew on, to download and share.
+    const message = reply.research
+      ? { ...added, attachments: await saveAttachments(deps.db, added.id, [reportFile(text, cited.sources)], deps.now()) }
+      : added;
     await attachApprovals(deps.db, conversationId, message.id, startedAt);
     await emit("done", { message });
   } catch (error) {
@@ -146,6 +149,29 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
     clearInterval(renewing);
     await stopReplying(deps.db, conversationId);
   }
+}
+
+/** Every tool a Bot has in an ordinary Task: its Computer, Skills, notes, schedules, and what the Customer connected. */
+async function everyTool(deps: AppDeps, reply: Reply, skillTools: Pick<TaskTools, "skills">): Promise<TaskTools> {
+  const { bot, conversationId } = reply;
+  const driving = await drivingFor(deps, bot.id);
+  const apps = await appTools(deps, bot);
+  return {
+    ...(driving ? { useComputer: (task: string) => driveComputer(deps, driving, task) } : {}),
+    ...skillTools,
+    notes: { list: await botNotes(deps.db, bot.id), book: notebook(deps.db, bot.id, deps.now) },
+    schedules: scheduleBook(deps, bot.id, reply.timeZone ?? "UTC"),
+    connected: [...(await mcpTools(deps, bot.id, bot.name)), ...apps.connected],
+    ...(apps.appCatalog ? { appCatalog: apps.appCatalog } : {}),
+    approvals: approvalDesk(deps, bot.id, conversationId),
+  };
+}
+
+/** A research report as a Markdown file: named after its title, with the pages it drew on at the end. */
+function reportFile(report: string, sources: WebSource[]): IncomingFile {
+  const title = /^#\s+(.+)$/m.exec(report)?.[1]?.replace(/[\\/:*?"<>|#]/g, "").trim().slice(0, 80);
+  const pages = sources.length > 0 ? `\n\n## Sources\n\n${sources.map((page, index) => `${index + 1}. [${page.title}](${page.url})`).join("\n")}\n` : "\n";
+  return { name: `${title || "Research report"}.md`, mediaType: "text/plain", bytes: Buffer.from(`${report.trim()}${pages}`, "utf8") };
 }
 
 /** Each Model provider's name, and the setting its key comes from (packages/config). */

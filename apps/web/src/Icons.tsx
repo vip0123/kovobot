@@ -136,6 +136,13 @@ export const SlidersIcon = (props: IconProps) => (
   </Icon>
 );
 
+export const ResearchIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="10.5" cy="10.5" r="6.5" />
+    <path d="M15.5 15.5 21 21M7.5 9h6M7.5 12h4" />
+  </Icon>
+);
+
 export const BookIcon = (props: IconProps) => (
   <Icon {...props}>
     <path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5z" />

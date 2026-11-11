@@ -18,6 +18,7 @@ import { FAKE_COMPOSIO_KEY, FakeComposio } from "./fake-composio.ts";
 import { FakeComputerService } from "./fake-computer-service.ts";
 import { FakeAnthropic, FakeChatCompletions } from "./fake-models.ts";
 import { FAKE_OPENAI_KEY, FakeOpenAI } from "./fake-openai.ts";
+import { FakeWeb } from "./fake-web.ts";
 
 /**
  * The API wired to the real, migrated test database. Only the edges are fake:
@@ -58,8 +59,10 @@ export function startTestServer(
   const openai = new FakeOpenAI();
   const anthropic = new FakeAnthropic();
   const chatCompletions = new FakeChatCompletions();
-  beforeAll(() => Promise.all([openai.start(), anthropic.start(), chatCompletions.start("/v1")]));
-  afterAll(() => Promise.all([openai.stop(), anthropic.stop(), chatCompletions.stop()]));
+  // The web pages a researching Bot reads.
+  const web = new FakeWeb();
+  beforeAll(() => Promise.all([openai.start(), anthropic.start(), chatCompletions.start("/v1"), web.start()]));
+  afterAll(() => Promise.all([openai.stop(), anthropic.stop(), chatCompletions.stop(), web.stop()]));
   // A fake's address is known only once it listens, so each adapter is made on first use.
   const lazy = (make: () => ModelAdapter): ModelAdapter => {
     let adapter: ModelAdapter | undefined;
@@ -109,7 +112,8 @@ export function startTestServer(
         outbox.push(email);
       },
     },
-    fetch: google.fetch,
+    // Google's token endpoint is the fake Google; pages on the fake web are read from it.
+    fetch: (input, init) => (web.serves(input instanceof Request ? input.url : input.toString()) ? fetch(input, init) : google.fetch(input, init)),
     models,
     // The fake's address is known only once it listens, so the client is made on first use.
     computers: options.computers
@@ -131,6 +135,8 @@ export function startTestServer(
     openai,
     anthropic,
     chatCompletions,
+    /** The web pages a Bot reads. */
+    web,
     computerService,
     /** The stand-in for Composio, when `composio` is on. */
     composio,
