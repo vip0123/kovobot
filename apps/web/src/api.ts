@@ -47,6 +47,8 @@ export interface Message {
   attachments?: Attachment[];
   /** The schedule whose firing sent this message, rather than the Customer. */
   scheduleId?: string | null;
+  /** The Approval this message tells the Bot the Customer decided: the Approval's card shows it. */
+  approvalId?: string | null;
   createdAt: string;
 }
 
@@ -83,8 +85,36 @@ export interface McpServer {
   state: "connected" | "needs_sign_in";
   /** Where the Customer signs in to the server, right after connecting one that wants it. */
   signInUrl?: string;
-  /** A tool that only reads runs at once; the rest wait for Approvals, which come later. */
-  tools: Array<{ name: string; description: string; readOnly: boolean }>;
+  /** A tool that only reads runs at once; the rest wait for the Customer's Approval. */
+  tools: Array<{ name: string; description: string; readOnly: boolean; kind: ActionKind }>;
+}
+
+/** What a tool does outside the Bot: reads run at once, the rest ask the Customer first. */
+export type ActionKind = "read" | "send" | "change" | "delete" | "pay";
+
+/** One action a Bot asked to take, and what came of it. */
+export interface Approval {
+  id: string;
+  /** The reply whose Task asked; null while it runs. */
+  messageId: string | null;
+  tool: { label: string; name: string };
+  kind: Exclude<ActionKind, "read">;
+  /** Exactly what runs. */
+  arguments: Record<string, unknown>;
+  /** Unknown: it was running when Kovobot restarted, and won't run again. */
+  state: "waiting" | "declined" | "running" | "done" | "failed" | "unknown";
+  /** It ran at once under a Pre-approval. */
+  preApproved: boolean;
+  result: string | null;
+  createdAt: string;
+}
+
+/** A standing OK for one kind of action on one tool of a Bot. */
+export interface PreApproval {
+  id: string;
+  tool: { label: string; name: string };
+  kind: Exclude<ActionKind, "read" | "pay">;
+  createdAt: string;
 }
 
 /** The browser's time zone, which the Bot's sense of "now" and "9am" follows. */
@@ -125,6 +155,8 @@ export interface ReplyHandlers {
   onStatus?: (status: string) => void;
   onThinking?: (text: string) => void;
   onSources?: (sources: WebSource[], searchSuggestions?: string) => void;
+  /** An action the Bot asked to take, or news of one: waiting, running, done. */
+  onApproval?: (approval: Approval) => void;
 }
 
 /** Instructions a Customer writes once for one kind of work, and gives to their Bots. */
@@ -236,7 +268,9 @@ export const api = {
   setInstructions: (id: string, instructions: string) =>
     request<{ bot: Bot }>(`/bots/${id}`, { method: "PATCH", json: { instructions } }),
   deleteBot: (id: string) => request<unknown>(`/bots/${id}`, { method: "DELETE" }),
-  messages: (botId: string) => request<{ messages: Message[] }>(`/bots/${botId}/messages`),
+  messages: (botId: string) => request<{ messages: Message[]; approvals: Approval[] }>(`/bots/${botId}/messages`),
+  preApprovals: (botId: string) => request<{ preApprovals: PreApproval[] }>(`/bots/${botId}/pre-approvals`),
+  removePreApproval: (botId: string, id: string) => request<unknown>(`/bots/${botId}/pre-approvals/${id}`, { method: "DELETE" }),
 
   skills: () => request<{ skills: Skill[] }>("/skills"),
   createSkill: (fields: SkillFields) => request<{ skill: Skill }>("/skills", { method: "POST", json: fields }),
@@ -294,39 +328,60 @@ export const api = {
    * web search found. Resolves with the saved reply.
    */
   async sendMessage(botId: string, content: string, options: MessageOptions, handlers: ReplyHandlers): Promise<Message> {
-    const { onSent = () => {}, onText, onStatus = () => {}, onThinking = () => {}, onSources = () => {} } = handlers;
     const response = await send(`/bots/${botId}/messages`, {
       method: "POST",
       json: { content, ...options, timeZone: BROWSER_TIME_ZONE },
     });
-    const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
-    let buffer = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += value.replaceAll("\r\n", "\n");
-      let end: number;
-      while ((end = buffer.indexOf("\n\n")) !== -1) {
-        const event = parseServerSentEvent(buffer.slice(0, end));
-        buffer = buffer.slice(end + 2);
-        if (event.name === "delta") onText((event.data as { text: string }).text);
-        if (event.name === "sent") onSent((event.data as { message: Message }).message);
-        if (event.name === "status") onStatus((event.data as { text: string }).text);
-        if (event.name === "thinking") onThinking((event.data as { text: string }).text);
-        if (event.name === "sources") {
-          const found = event.data as { sources: WebSource[]; searchSuggestions?: string };
-          onSources(found.sources, found.searchSuggestions);
-        }
-        if (event.name === "done") return (event.data as { message: Message }).message;
-        if (event.name === "error") {
-          const error = event.data as { code: string; message: string };
-          throw new ApiError(200, error.code, error.message);
-        }
-      }
-    }
-    throw new ApiError(0, "interrupted", "The reply was cut off. Reload the page to see whether it finished.");
+    return readReply(response, handlers);
+  },
+
+  /**
+   * Approves or declines an action the Bot asked to take, and streams what follows: the action
+   * running (`onApproval`), the decision as saved (`onSent`), then the Bot's reply, as for a message.
+   * `alwaysAllow` also pre-approves that kind of action on that tool. Resolves with the saved reply.
+   */
+  async decideApproval(
+    botId: string,
+    approvalId: string,
+    decision: { decision: "approve" | "decline"; alwaysAllow?: boolean },
+    handlers: ReplyHandlers,
+  ): Promise<Message> {
+    const response = await send(`/bots/${botId}/approvals/${approvalId}`, { method: "POST", json: decision });
+    return readReply(response, handlers);
   },
 };
+
+/** Reads a streamed reply's events into `handlers`, resolving with the saved reply. */
+async function readReply(response: Response, handlers: ReplyHandlers): Promise<Message> {
+  const { onSent = () => {}, onText, onStatus = () => {}, onThinking = () => {}, onSources = () => {}, onApproval = () => {} } = handlers;
+  const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += value.replaceAll("\r\n", "\n");
+    let end: number;
+    while ((end = buffer.indexOf("\n\n")) !== -1) {
+      const event = parseServerSentEvent(buffer.slice(0, end));
+      buffer = buffer.slice(end + 2);
+      if (event.name === "delta") onText((event.data as { text: string }).text);
+      if (event.name === "sent") onSent((event.data as { message: Message }).message);
+      if (event.name === "status") onStatus((event.data as { text: string }).text);
+      if (event.name === "thinking") onThinking((event.data as { text: string }).text);
+      if (event.name === "approval") onApproval((event.data as { approval: Approval }).approval);
+      if (event.name === "sources") {
+        const found = event.data as { sources: WebSource[]; searchSuggestions?: string };
+        onSources(found.sources, found.searchSuggestions);
+      }
+      if (event.name === "done") return (event.data as { message: Message }).message;
+      if (event.name === "error") {
+        const error = event.data as { code: string; message: string };
+        throw new ApiError(200, error.code, error.message);
+      }
+    }
+  }
+  throw new ApiError(0, "interrupted", "The reply was cut off. Reload the page to see whether it finished.");
+}
 
 function parseServerSentEvent(block: string): { name: string; data: unknown } {
   let name = "message";

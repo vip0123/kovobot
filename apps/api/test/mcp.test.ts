@@ -52,7 +52,7 @@ async function chat(browser: Browser, bot: { id: string }, content: string) {
 const offeredTools = () => (server.openai.requests.at(-1)!.tools ?? []).map((tool) => (tool as { name?: string }).name);
 
 describe("MCP servers", () => {
-  test("a Customer connects an MCP server; the Bot uses its tools that only read, and what they return is Outside content", async () => {
+  test("a Customer connects an MCP server; the Bot uses its tools, reads at once, and what they return is Outside content", async () => {
     mcp.requireSignIn = false;
     const { browser, bot } = await signedInBot();
 
@@ -64,9 +64,11 @@ describe("MCP servers", () => {
         name: "Bakery orders",
         state: "connected",
         tools: [
-          { name: "cancel_order", description: "Cancels an order and refunds it.", readOnly: false },
-          { name: "lookup.order", description: "Looks up an order the old way.", readOnly: true },
-          { name: "lookup_order", description: "Looks up one order by its number.", readOnly: true },
+          // Refunding moves money, so cancelling counts as paying: never pre-approved.
+          { name: "cancel_order", description: "Cancels an order and refunds it.", readOnly: false, kind: "pay" },
+          { name: "email_receipt", description: "Emails an order's receipt to the person who ordered.", readOnly: false, kind: "send" },
+          { name: "lookup.order", description: "Looks up an order the old way.", readOnly: true, kind: "read" },
+          { name: "lookup_order", description: "Looks up one order by its number.", readOnly: true, kind: "read" },
         ],
       },
     });
@@ -79,8 +81,8 @@ describe("MCP servers", () => {
     expect(offered).toContain("bakery_orders__lookup_order");
     // Two tools whose names come out the same for the model each get a name of their own.
     expect(offered).toContain("bakery_orders__lookup_order_2");
-    // Anything that changes things waits for Approvals, which aren't here yet.
-    expect(offered).not.toContain("bakery_orders__cancel_order");
+    // Tools that do more than read are offered too: they wait for the Customer's Approval (approvals.test.ts).
+    expect(offered).toContain("bakery_orders__cancel_order");
     expect(mcp.calls.at(-1)).toMatchObject({ name: "lookup_order", args: { order: 42 } });
     expect(server.openai.requests.at(-1)!.input.at(-1)).toEqual({
       type: "function_call_output",
@@ -122,7 +124,7 @@ describe("MCP servers", () => {
     const landed = await browser.get(back.pathname + back.search);
     expect(landed.status).toBe(302);
     expect(landed.headers.get("location")).toBe(`${server.config.appUrl}/bots/${bot.id}?mcp=connected`);
-    expect(await serversOf(browser, bot)).toMatchObject([{ state: "connected", name: "Bakery orders", tools: [{}, {}, { name: "lookup_order" }] }]);
+    expect(await serversOf(browser, bot)).toMatchObject([{ state: "connected", name: "Bakery orders", tools: [{}, {}, {}, { name: "lookup_order" }] }]);
 
     modelCalls("bakery_orders__lookup_order", { order: 9 });
     await chat(browser, bot, "Look up order 9.");

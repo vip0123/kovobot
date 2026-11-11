@@ -14,6 +14,7 @@ import {
   StreamableHTTPClientTransport,
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
+import { type ActionKind, actionKind, type ActionOutcome, type ActionTool } from "./actions.ts";
 import type { AppDeps } from "./app.ts";
 import { type Customer, ownBotOnly } from "./customers.ts";
 import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
@@ -25,6 +26,8 @@ interface McpTool {
   description: string;
   /** The server marks it as only reading: it runs at once. Anything else waits for an Approval. */
   readOnly: boolean;
+  /** The server marks it as one that may delete or overwrite. */
+  destructive?: boolean;
   inputSchema: FunctionTool["parameters"];
 }
 
@@ -55,7 +58,7 @@ export interface McpServerView {
   state: StoredServer["state"];
   /** Where the Customer signs in to the server, while it wants that. */
   signInUrl?: string;
-  tools: Array<Pick<McpTool, "name" | "description" | "readOnly">>;
+  tools: Array<Pick<McpTool, "name" | "description" | "readOnly"> & { kind: ActionKind }>;
 }
 
 /** One of the Bot's tools from a connected app or server, for its Task. */
@@ -63,6 +66,10 @@ export interface ConnectedTool {
   tool: FunctionTool;
   /** What the Customer sees while it runs. */
   status: string;
+  /** Reads run at once; any other kind waits for the Customer's Approval, unless a Pre-approval covers it. */
+  kind: ActionKind;
+  /** The tool as Approvals know it, and how to run it once approved. */
+  action: ActionTool;
   call: (input: Record<string, unknown>) => Promise<string>;
 }
 
@@ -162,7 +169,7 @@ export function mcpRoutes(deps: AppDeps) {
   return routes;
 }
 
-/** The Bot's tools from its connected MCP servers, for one Task. Only tools that only read, until Approvals. */
+/** The Bot's tools from its connected MCP servers, for one Task. Tools that do more than read ask for an Approval. */
 export async function mcpTools(deps: AppDeps, botId: string, botName: string): Promise<ConnectedTool[]> {
   const { rows } = await deps.db.query<StoredServer>(
     `SELECT ${SERVER_COLUMNS} FROM mcp_servers WHERE bot_id = $1 AND state = 'connected' ORDER BY created_at, id`,
@@ -175,36 +182,58 @@ export async function mcpTools(deps: AppDeps, botId: string, botName: string): P
     let prefix = slug(label);
     for (let n = 2; taken.has(prefix); n += 1) prefix = `${slug(label)}_${n}`;
     taken.add(prefix);
-    const readOnly = server.tools.filter((each) => each.readOnly);
     const unchanged = (tool: McpTool) => /^[A-Za-z0-9_-]+$/.test(tool.name);
-    for (const tool of [...readOnly.filter(unchanged), ...readOnly.filter((tool) => !unchanged(tool))]) {
+    for (const tool of [...server.tools.filter(unchanged), ...server.tools.filter((tool) => !unchanged(tool))]) {
       const base = `${prefix}__${tool.name.replace(/[^A-Za-z0-9_-]/g, "_")}`.slice(0, 60);
       let name = base;
       for (let n = 2; taken.has(name); n += 1) name = `${base}_${n}`;
       taken.add(name);
+      const kind = actionKind(tool);
+      const asks = kind === "read" ? "" : " It may wait for the Customer's Approval.";
       tools.push({
-        tool: { name, description: `${tool.description} (A tool of ${label}, an MCP server.)`.trim(), parameters: tool.inputSchema },
+        tool: { name, description: `${tool.description} (A tool of ${label}, an MCP server.${asks})`.trim(), parameters: tool.inputSchema },
         status: `${botName} is using ${label}: ${tool.name}.`,
-        call: (input) => callTool(deps, server, tool.name, input),
+        kind,
+        action: { key: `mcp:${server.id}:${tool.name}`, label, name: tool.name, ref: { source: "mcp", serverId: server.id, tool: tool.name } },
+        call: async (input) => (await callTool(deps, server, tool.name, input)).output,
       });
     }
   }
   return tools;
 }
 
+/**
+ * Runs one of a Bot's MCP tools that the Customer approved, on its server as it is now: a server
+ * the Customer has since removed, or that wants signing in again, says so instead.
+ */
+export async function runMcpAction(
+  deps: AppDeps,
+  botId: string,
+  ref: { serverId: string; tool: string },
+  input: Record<string, unknown>,
+): Promise<ActionOutcome> {
+  const { rows } = await deps.db.query<StoredServer>(
+    `SELECT ${SERVER_COLUMNS} FROM mcp_servers WHERE id = $1 AND bot_id = $2 AND state = 'connected'`,
+    [ref.serverId, botId],
+  );
+  if (!rows[0]) return { output: "That MCP server isn't connected to the Bot any more.", failed: true };
+  return callTool(deps, rows[0], ref.tool, input);
+}
+
 /** Calls one tool on its server; whatever goes wrong is said in words, for the model. */
-async function callTool(deps: AppDeps, server: StoredServer, name: string, input: Record<string, unknown>): Promise<string> {
+async function callTool(deps: AppDeps, server: StoredServer, name: string, input: Record<string, unknown>): Promise<ActionOutcome> {
   const auth = new StoredOAuth(deps, server);
   const client = new Client(CLIENT_INFO);
   try {
     await client.connect(transportTo(deps, server, auth));
-    return toolOutput((await client.callTool({ name, arguments: input })) as CallToolResult);
+    const result = (await client.callTool({ name, arguments: input })) as CallToolResult;
+    return { output: toolOutput(result), failed: result.isError === true };
   } catch (error) {
     if (error instanceof UnauthorizedError) {
       await deps.db.query("UPDATE mcp_servers SET state = 'needs_sign_in', updated_at = $2 WHERE id = $1", [server.id, deps.now()]);
-      return "That MCP server wants the Customer to sign in to it again, on your page. Tell them.";
+      return { output: "That MCP server wants the Customer to sign in to it again, on your page. Tell them.", failed: true };
     }
-    return `That MCP server didn't answer: ${(error as Error).message}`;
+    return { output: `That MCP server didn't answer: ${(error as Error).message}`, failed: true };
   } finally {
     await client.close().catch(() => {});
   }
@@ -239,6 +268,7 @@ async function reach(deps: AppDeps, server: StoredServer): Promise<{ server: Mcp
           name: tool.name,
           description: (tool.description ?? tool.title ?? "").slice(0, 1_000),
           readOnly: tool.annotations?.readOnlyHint === true,
+          destructive: tool.annotations?.destructiveHint === true,
           inputSchema: tool.inputSchema as FunctionTool["parameters"],
         });
       }
@@ -398,7 +428,7 @@ function view(server: Pick<StoredServer, "id" | "url" | "name" | "state" | "tool
     url: server.url,
     name: server.name,
     state: server.state,
-    tools: server.tools.map(({ name, description, readOnly }) => ({ name, description, readOnly })),
+    tools: server.tools.map((tool) => ({ name: tool.name, description: tool.description, readOnly: tool.readOnly, kind: actionKind(tool) })),
   };
 }
 

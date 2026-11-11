@@ -17,6 +17,8 @@ export interface Message {
   attachments: AttachmentInfo[];
   /** The schedule whose firing sent this message, rather than the Customer; null for none. */
   scheduleId: string | null;
+  /** The Approval this message tells the model the Customer decided; null for none. */
+  approvalId: string | null;
   createdAt: Date;
 }
 
@@ -53,7 +55,7 @@ export async function webConversation(db: Db, botId: string, now: Date): Promise
 }
 
 const MESSAGE_COLUMNS = `id::text, role, content, thinking, sources, search_suggestions AS "searchSuggestions",
-  ${ATTACHMENTS_COLUMN}, schedule_id AS "scheduleId", created_at AS "createdAt"`;
+  ${ATTACHMENTS_COLUMN}, schedule_id AS "scheduleId", approval_id AS "approvalId", created_at AS "createdAt"`;
 
 export async function listMessages(db: Db, conversationId: string): Promise<Message[]> {
   const { rows } = await db.query<Message>(
@@ -107,11 +109,16 @@ export async function addMessage(
   role: Message["role"],
   content: string,
   now: Date,
-  extras: { thinking?: string; cited?: { sources: WebSource[]; searchSuggestions?: string }; scheduleId?: string } = {},
+  extras: {
+    thinking?: string;
+    cited?: { sources: WebSource[]; searchSuggestions?: string };
+    scheduleId?: string;
+    approvalId?: string;
+  } = {},
 ): Promise<Message> {
   const { rows } = await db.query<Message>(
-    `INSERT INTO messages (conversation_id, role, content, thinking, sources, search_suggestions, schedule_id, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO messages (conversation_id, role, content, thinking, sources, search_suggestions, schedule_id, approval_id, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING ${MESSAGE_COLUMNS}`,
     [
       conversationId,
@@ -121,6 +128,7 @@ export async function addMessage(
       extras.cited?.sources.length ? JSON.stringify(extras.cited.sources) : null,
       extras.cited?.searchSuggestions ?? null,
       extras.scheduleId ?? null,
+      extras.approvalId ?? null,
       now,
     ],
   );

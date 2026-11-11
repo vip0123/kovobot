@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import { api, ApiError, type Bot, type Computer, errorMessage, type Message, type ModelCatalog } from "../api.ts";
+import { api, ApiError, type Approval, type Bot, type Computer, errorMessage, type Message, type ModelCatalog } from "../api.ts";
 import { AppShell, PageHeader, useShell } from "../AppShell.tsx";
 import { BotAvatar } from "../BotAvatar.tsx";
 import { ComputerPanel } from "../ComputerPanel.tsx";
@@ -50,6 +50,9 @@ function BotChat({ id }: { id: string }) {
   const exists = bot !== undefined;
   const [messages, setMessages] = useState<Message[] | null>(null);
   const updateMessages = useCallback((update: (messages: Message[]) => Message[]) => setMessages((current) => update(current ?? [])), []);
+  // Each action the Bot asked to take, shown under the reply that asked.
+  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const updateApprovals = useCallback((update: (approvals: Approval[]) => Approval[]) => setApprovals(update), []);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [computer, setComputer] = useState<ComputerState>(undefined);
   // Back from signing in to an MCP server: the Tools tab says how it went.
@@ -63,7 +66,10 @@ function BotChat({ id }: { id: string }) {
   useEffect(() => {
     if (!exists) return;
     api.messages(id).then(
-      ({ messages }) => setMessages(messages),
+      ({ messages, approvals }) => {
+        setMessages(messages);
+        setApprovals(approvals);
+      },
       (caught: unknown) => {
         setMessages([]);
         setLoadError(errorMessage(caught));
@@ -108,8 +114,10 @@ function BotChat({ id }: { id: string }) {
           bot={bot}
           catalog={catalog}
           messages={messages}
+          approvals={approvals}
           loadError={loadError}
           onMessages={updateMessages}
+          onApprovals={updateApprovals}
           canUseComputer={Boolean(computer && computer !== "off" && bot.driverModel)}
         />
         {drawer === "computer" && computer !== undefined && computer !== "off" && (

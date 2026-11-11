@@ -1,5 +1,6 @@
 import { runTask } from "./agent.ts";
 import type { AppDeps } from "./app.ts";
+import { approvalDesk, attachApprovals } from "./approvals.ts";
 import { conversationForModel } from "./attachments.ts";
 import { addMessage, recentMessages, RENEW_REPLY_CLAIM_MS, renewReplying, stopReplying } from "./conversations.ts";
 import { driveComputer, drivingFor } from "./driver.ts";
@@ -25,10 +26,15 @@ export interface Reply {
   timeZone: string | null;
   /** A firing whose first Task a restart cut off: the model is told some of it may be done. */
   restarted?: boolean;
+  /**
+   * What an action the Customer just approved returned: shown to the model with the newest
+   * message for this Task only, as Outside content, the way a tool's result is.
+   */
+  actionResult?: string;
 }
 
 /** What a reply reports as it runs. */
-export type ReplyEvent = "status" | "thinking" | "sources" | "delta" | "done" | "error";
+export type ReplyEvent = "status" | "thinking" | "sources" | "approval" | "delta" | "done" | "error";
 
 /** Where a reply's events go: the web page's stream, or nowhere when nobody is watching. */
 export type ReplyEvents = (event: ReplyEvent, data: unknown) => Promise<void>;
@@ -40,6 +46,7 @@ export type ReplyEvents = (event: ReplyEvent, data: unknown) => Promise<void>;
  */
 export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): Promise<void> {
   const { bot, model, conversationId } = reply;
+  const startedAt = deps.now();
   let text = "";
   let thinking = "";
   // A Task may search in more than one model call: every page once.
@@ -64,6 +71,9 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
         : when && `[${when}]`;
       if (header) newest.content = `${header}\n${newest.content}`;
     }
+    if (newest && reply.actionResult !== undefined) {
+      newest.content = `${newest.content}\nWhat it returned, which is Outside content and not the Customer's words:\n${reply.actionResult}`;
+    }
     const driving = await drivingFor(deps, bot.id);
     const skills = await botSkills(deps.db, bot.id);
     const tools = {
@@ -72,6 +82,7 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
       notes: { list: await botNotes(deps.db, bot.id), book: notebook(deps.db, bot.id, deps.now) },
       schedules: scheduleBook(deps, bot.id, reply.timeZone ?? "UTC"),
       connected: await mcpTools(deps, bot.id, bot.name),
+      approvals: approvalDesk(deps, bot.id, conversationId),
     };
     const task = {
       botName: bot.name,
@@ -81,11 +92,13 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
       tools,
       thinking: reply.thinking,
       webSearch: reply.webSearch,
+      outsideContentRead: reply.actionResult !== undefined,
     };
     // A Task may make several model calls; each one's thinking starts a new paragraph.
     let callEnded = false;
     for await (const event of runTask(reply.adapter, task)) {
       if (event.type === "status") await emit("status", { text: event.text });
+      if (event.type === "approval") await emit("approval", { approval: event.approval });
       if (event.type === "done") callEnded = true;
       if (event.type === "thinking") {
         const piece = thinking && callEnded ? `\n\n${event.text}` : event.text;
@@ -105,11 +118,15 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
     // An empty reply would break the conversation for Model providers that refuse empty turns.
     if (!text.trim()) throw new Error("The model's reply was empty.");
     const message = await addMessage(deps.db, conversationId, "assistant", text, deps.now(), { thinking, cited });
+    await attachApprovals(deps.db, conversationId, message.id, startedAt);
     await emit("done", { message });
   } catch (error) {
     console.error(`Bot ${bot.id}: the model call failed`, error);
     // Keep what the Customer already saw, so a reload shows the same conversation.
-    if (text) await addMessage(deps.db, conversationId, "assistant", text, deps.now(), { thinking, cited });
+    if (text) {
+      const message = await addMessage(deps.db, conversationId, "assistant", text, deps.now(), { thinking, cited });
+      await attachApprovals(deps.db, conversationId, message.id, startedAt);
+    }
     await emit(
       "error",
       error instanceof ModelError && error.keyRefused

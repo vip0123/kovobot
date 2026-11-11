@@ -1,6 +1,17 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router";
-import { api, BROWSER_TIME_ZONE, type Bot, errorMessage, type McpServer, type Note, type Schedule, type ScheduleRule, type Skill } from "./api.ts";
+import {
+  api,
+  BROWSER_TIME_ZONE,
+  type Bot,
+  errorMessage,
+  type McpServer,
+  type Note,
+  type PreApproval,
+  type Schedule,
+  type ScheduleRule,
+  type Skill,
+} from "./api.ts";
 import { CloseIcon } from "./Icons.tsx";
 
 /** The most a Bot's instructions may hold, as the API allows. */
@@ -654,8 +665,20 @@ function ScheduleForm({
  * The MCP servers connected to the Bot, and their tools. A server that wants signing in sends
  * the Customer to its own sign-in page, which brings them back here.
  */
+/** What each kind of tool does, as the Tools tab says it. */
+const TOOL_KINDS: Record<McpServer["tools"][number]["kind"], string> = {
+  read: "runs at once",
+  send: "asks first: sends",
+  change: "asks first: changes",
+  delete: "asks first: deletes",
+  pay: "always asks: pays",
+};
+
+const PRE_APPROVED_KINDS: Record<PreApproval["kind"], string> = { send: "sends", change: "changes things", delete: "deletes" };
+
 function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
   const [servers, setServers] = useState<McpServer[] | null>(null);
+  const [preApprovals, setPreApprovals] = useState<PreApproval[]>([]);
   const [url, setUrl] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -668,7 +691,21 @@ function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
         setError(errorMessage(caught));
       },
     );
+    api.preApprovals(bot.id).then(
+      ({ preApprovals }) => setPreApprovals(preApprovals),
+      () => {},
+    );
   }, [bot.id]);
+
+  async function removePreApproval(preApproval: PreApproval) {
+    setError(null);
+    try {
+      await api.removePreApproval(bot.id, preApproval.id);
+      setPreApprovals((current) => current.filter((each) => each.id !== preApproval.id));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
 
   async function connect(event: FormEvent) {
     event.preventDefault();
@@ -715,14 +752,15 @@ function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
   return (
     <div className="drawer-section">
       <p className="muted small">
-        Connect an MCP server and {bot.name} can use its tools. Tools that only read run at once; anything that would change
-        something waits for Approvals, which come next. What a tool sends back is treated as outside content.
+        Connect an MCP server and {bot.name} can use its tools. Tools that only read run at once. Anything that sends, changes,
+        deletes or pays asks you first, in the Conversation, showing exactly what it will do. What a tool sends back is
+        treated as outside content.
       </p>
       {notice && <p className="notice small">{notice}</p>}
       {servers === null ? (
         <p className="muted small">Loading…</p>
       ) : servers.length === 0 ? (
-        <p className="memory-empty small">No MCP servers yet.</p>
+        <p className="empty-list small">No MCP servers yet.</p>
       ) : (
         <ul className="notes">
           {servers.map((server) => (
@@ -739,7 +777,7 @@ function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
                   {server.tools.map((tool) => (
                     <li key={tool.name} title={tool.description}>
                       <code>{tool.name}</code>
-                      <span className="muted">{tool.readOnly ? "runs at once" : "waits for Approvals"}</span>
+                      <span className="muted">{TOOL_KINDS[tool.kind] ?? (tool.readOnly ? TOOL_KINDS.read : "asks first")}</span>
                     </li>
                   ))}
                 </ul>
@@ -758,6 +796,30 @@ function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
             </li>
           ))}
         </ul>
+      )}
+      {preApprovals.length > 0 && (
+        <>
+          <h3 className="drawer-subhead">Pre-approved</h3>
+          <p className="muted small">
+            {bot.name} uses these without asking, until a Task reads outside content. Paying always asks.
+          </p>
+          <ul className="notes">
+            {preApprovals.map((preApproval) => (
+              <li key={preApproval.id} className="note">
+                <p className="note-text">
+                  {preApproval.tool.label} · <code>{preApproval.tool.name}</code>{" "}
+                  <span className="muted small">{PRE_APPROVED_KINDS[preApproval.kind]}</span>
+                </p>
+                <div className="note-foot">
+                  <span />
+                  <button type="button" className="button ghost small danger-text" onClick={() => void removePreApproval(preApproval)}>
+                    Remove
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
       <form className="note-add" onSubmit={connect}>
         <label htmlFor="mcp-url" className="visually-hidden">
