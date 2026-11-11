@@ -167,6 +167,13 @@ describe("Approvals", () => {
     expect(approvalsIn(await chat(browser, bot, "Look up order 3 and email its receipt."))).toMatchObject([
       { arguments: { order: 3 }, state: "waiting", preApproved: false },
     ]);
+    // Later Tasks know what earlier replies did, not just what they said, so the Bot doesn't do it twice.
+    expect(server.openai.requests.at(-1)!.instructions).toContain("Kovobot's record, in brackets at the end of each reply: it is accurate");
+    const history = JSON.stringify(server.openai.requests.at(-1)!.input);
+    expect(history).toContain("[Kovobot's record of this reply: you asked the Customer to approve Bakery orders: email_receipt {\\\"order\\\":1}]");
+    expect(history).toContain(
+      "[Kovobot's record of this reply: under the Customer's Pre-approval, this ran and worked: Bakery orders: email_receipt {\\\"order\\\":2}]",
+    );
 
     // Paying is never pre-approved.
     modelCalls([["bakery_orders__cancel_order", { order: 4 }]]);

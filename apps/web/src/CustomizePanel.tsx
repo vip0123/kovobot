@@ -876,6 +876,22 @@ function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
           ))}
         </ul>
       )}
+      <form className="note-add" onSubmit={connect}>
+        <label htmlFor="mcp-url" className="visually-hidden">
+          MCP server address
+        </label>
+        <input
+          id="mcp-url"
+          type="url"
+          required
+          placeholder="https://mcp.example.com/mcp"
+          value={url}
+          onChange={(event) => setUrl(event.target.value)}
+        />
+        <button type="submit" className="button secondary small" disabled={connecting || !url.trim()}>
+          {connecting ? "Connecting…" : "Connect"}
+        </button>
+      </form>
       {preApprovals.length > 0 && (
         <>
           <h3 className="drawer-subhead">Pre-approved</h3>
@@ -900,22 +916,6 @@ function Tools({ bot, notice }: { bot: Bot; notice?: string }) {
           </ul>
         </>
       )}
-      <form className="note-add" onSubmit={connect}>
-        <label htmlFor="mcp-url" className="visually-hidden">
-          MCP server address
-        </label>
-        <input
-          id="mcp-url"
-          type="url"
-          required
-          placeholder="https://mcp.example.com/mcp"
-          value={url}
-          onChange={(event) => setUrl(event.target.value)}
-        />
-        <button type="submit" className="button secondary small" disabled={connecting || !url.trim()}>
-          {connecting ? "Connecting…" : "Connect"}
-        </button>
-      </form>
       {error && (
         <p className="alert" role="alert">
           {error}

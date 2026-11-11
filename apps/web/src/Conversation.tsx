@@ -552,7 +552,7 @@ const ACTION_KINDS: Record<Approval["kind"], { label: string; verb: string }> = 
   send: { label: "Sends", verb: "send" },
   change: { label: "Changes", verb: "change things" },
   delete: { label: "Deletes", verb: "delete" },
-  pay: { label: "Pays", verb: "pay" },
+  pay: { label: "Pays", verb: "move money" },
 };
 
 /** What came of an action, once it's decided. */
@@ -593,7 +593,10 @@ function ApprovalCard({
   const values = Object.entries(approval.arguments);
   const waiting = approval.state === "waiting";
   return (
-    <section className={`approval${waiting ? " waiting" : ""}`} aria-label={`${bot.name} asks to use ${approval.tool.name}`}>
+    <section
+      className={`approval${waiting ? " waiting" : ""}`}
+      aria-label={waiting ? `${bot.name} asks to use ${approval.tool.name}` : `${bot.name}'s action: ${approval.tool.name}`}
+    >
       <div className="approval-head">
         <span className={`badge kind-${approval.kind}`}>{kind.label}</span>
         <span className="approval-tool">
