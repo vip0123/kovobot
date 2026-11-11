@@ -11,6 +11,8 @@ export interface Bot {
   model: string;
   /** The model the Bot operates its Computer with: OpenAI, Anthropic or Google; null until picked. */
   driverModel: string | null;
+  /** What the Customer tells the Bot about how to work for them; empty for none. */
+  instructions: string;
   createdAt: string;
 }
 
@@ -162,6 +164,8 @@ export const api = {
   switchModel: (id: string, model: string) => request<{ bot: Bot }>(`/bots/${id}`, { method: "PATCH", json: { model } }),
   setDriverModel: (id: string, driverModel: string | null) =>
     request<{ bot: Bot }>(`/bots/${id}`, { method: "PATCH", json: { driverModel } }),
+  setInstructions: (id: string, instructions: string) =>
+    request<{ bot: Bot }>(`/bots/${id}`, { method: "PATCH", json: { instructions } }),
   deleteBot: (id: string) => request<unknown>(`/bots/${id}`, { method: "DELETE" }),
   messages: (botId: string) => request<{ messages: Message[] }>(`/bots/${botId}/messages`),
 

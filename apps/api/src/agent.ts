@@ -32,6 +32,8 @@ export async function* runTask(
   adapter: ModelAdapter,
   task: {
     botName: string;
+    /** What the Customer told the Bot about how to work for them; empty for none. */
+    instructions?: string;
     model: string;
     conversation: ChatMessage[];
     tools?: TaskTools;
@@ -49,7 +51,7 @@ export async function* runTask(
     let paused = false;
     for await (const event of adapter.stream({
       model: task.model,
-      instructions: botInstructions(task.botName, tools !== undefined),
+      instructions: botInstructions(task, tools !== undefined),
       conversation,
       tools,
       thinking: task.thinking,
@@ -95,12 +97,16 @@ async function* runTool(call: ToolCall, task: { botName: string; tools?: TaskToo
   }
 }
 
-function botInstructions(botName: string, hasComputer: boolean): string {
-  return [
-    `You are ${botName}, a Bot on Kovobot that works for the Customer who set you up.`,
+/** Ours first, then the Customer's own, which win where the two differ. */
+function botInstructions(task: { botName: string; instructions?: string }, hasComputer: boolean): string {
+  const ours = [
+    `You are ${task.botName}, a Bot on Kovobot that works for the Customer who set you up.`,
     "Answer clearly and briefly, and say so when you don't know something.",
     ...(hasComputer
       ? ["You have a Computer, a Linux desktop with Firefox: use use_computer for anything that needs a browser or desktop apps."]
       : []),
   ].join(" ");
+  const theirs = task.instructions?.trim();
+  if (!theirs) return ours;
+  return `${ours}\n\nThe Customer gave you these instructions. Follow them, and where they differ from the above, they win.\n\n${theirs}`;
 }

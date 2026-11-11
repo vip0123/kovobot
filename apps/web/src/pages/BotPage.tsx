@@ -5,7 +5,8 @@ import { AppShell, PageHeader, useShell } from "../AppShell.tsx";
 import { BotAvatar } from "../BotAvatar.tsx";
 import { ComputerPanel } from "../ComputerPanel.tsx";
 import { Conversation } from "../Conversation.tsx";
-import { ChevronDownIcon, ComputerIcon } from "../Icons.tsx";
+import { CustomizePanel } from "../CustomizePanel.tsx";
+import { ChevronDownIcon, ComputerIcon, SlidersIcon } from "../Icons.tsx";
 import { Menu } from "../Menu.tsx";
 import { canUse, ModelPicker, modelLabel } from "../ModelPicker.tsx";
 
@@ -27,6 +28,9 @@ function BotRoute() {
 /** undefined while loading, "off" where no Computer service is set up, null for none yet. */
 type ComputerState = Computer | null | "off" | undefined;
 
+/** What the panel beside the Conversation shows, when open. */
+type Drawer = "computer" | "customize";
+
 const COMPUTER_STATES: Record<Computer["state"], string> = {
   running: "Running",
   asleep: "Asleep",
@@ -41,7 +45,7 @@ function BotChat({ id }: { id: string }) {
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [computer, setComputer] = useState<ComputerState>(undefined);
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [drawer, setDrawer] = useState<Drawer | null>(null);
 
   useEffect(() => {
     if (!exists) return;
@@ -82,8 +86,8 @@ function BotChat({ id }: { id: string }) {
         bot={bot}
         catalog={catalog}
         computer={computer}
-        panelOpen={panelOpen}
-        onTogglePanel={() => setPanelOpen(!panelOpen)}
+        drawer={drawer}
+        onToggleDrawer={(which) => setDrawer(drawer === which ? null : which)}
         onChange={saveBot}
       />
       <div className="bot-body">
@@ -95,16 +99,21 @@ function BotChat({ id }: { id: string }) {
           onMessages={(update) => setMessages((current) => update(current ?? []))}
           canUseComputer={Boolean(computer && computer !== "off" && bot.driverModel)}
         />
-        {panelOpen && computer !== undefined && computer !== "off" && (
-          <aside className="computer-drawer" aria-label={`${bot.name}'s Computer`}>
+        {drawer === "computer" && computer !== undefined && computer !== "off" && (
+          <aside className="side-drawer" aria-label={`${bot.name}'s Computer`}>
             <ComputerPanel
               bot={bot}
               catalog={catalog}
               computer={computer}
               onChange={setComputer}
               onBotChange={saveBot}
-              onClose={() => setPanelOpen(false)}
+              onClose={() => setDrawer(null)}
             />
+          </aside>
+        )}
+        {drawer === "customize" && (
+          <aside className="side-drawer" aria-label={`Customize ${bot.name}`}>
+            <CustomizePanel bot={bot} onBotChange={saveBot} onClose={() => setDrawer(null)} />
           </aside>
         )}
       </div>
@@ -116,15 +125,15 @@ function BotHeader({
   bot,
   catalog,
   computer,
-  panelOpen,
-  onTogglePanel,
+  drawer,
+  onToggleDrawer,
   onChange,
 }: {
   bot: Bot;
   catalog: ModelCatalog;
   computer: ComputerState;
-  panelOpen: boolean;
-  onTogglePanel: () => void;
+  drawer: Drawer | null;
+  onToggleDrawer: (which: Drawer) => void;
   onChange: (bot: Bot) => void;
 }) {
   const navigate = useNavigate();
@@ -209,15 +218,24 @@ function BotHeader({
           )}
         </div>
         <div className="header-actions">
+          <button
+            type="button"
+            className={`button ghost small drawer-toggle customize-toggle${drawer === "customize" ? " active" : ""}`}
+            aria-pressed={drawer === "customize"}
+            onClick={() => onToggleDrawer("customize")}
+          >
+            <SlidersIcon size={18} />
+            <span className="drawer-toggle-label">Customize</span>
+          </button>
           {computer !== undefined && computer !== "off" && (
             <button
               type="button"
-              className={`button ghost small computer-toggle${panelOpen ? " active" : ""}`}
-              aria-pressed={panelOpen}
-              onClick={onTogglePanel}
+              className={`button ghost small drawer-toggle${drawer === "computer" ? " active" : ""}`}
+              aria-pressed={drawer === "computer"}
+              onClick={() => onToggleDrawer("computer")}
             >
               <ComputerIcon size={18} />
-              <span className="computer-toggle-label">Computer</span>
+              <span className="drawer-toggle-label">Computer</span>
               <span
                 className={`state-dot ${computer ? computer.state : "none"}`}
                 title={computer ? COMPUTER_STATES[computer.state] : "None yet"}
@@ -233,6 +251,17 @@ function BotHeader({
                 </button>
                 <button type="button" role="menuitem" className="menu-item" onClick={() => (close(), start("switching"))}>
                   Change model
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item"
+                  onClick={() => {
+                    close();
+                    if (drawer !== "customize") onToggleDrawer("customize");
+                  }}
+                >
+                  Customize
                 </button>
                 <button type="button" role="menuitem" className="menu-item danger" onClick={() => (close(), start("deleting"))}>
                   Delete…

@@ -21,7 +21,7 @@ async function createBot(browser: Browser, name = "Scout", model = "gpt-6-luna")
   return ((await response.json()) as { bot: Bot }).bot;
 }
 
-function patchBot(browser: Browser, bot: Bot, change: { name?: string; model?: string }, on = server) {
+function patchBot(browser: Browser, bot: Bot, change: { name?: string; model?: string; instructions?: unknown }, on = server) {
   return browser.send(`/api/bots/${bot.id}`, {
     method: "PATCH",
     headers: { origin: on.config.appUrl, "content-type": "application/json" },
@@ -239,6 +239,50 @@ describe("Bots", () => {
 
   test("signed out, there are no Bots to see", async () => {
     expect((await server.browser().get("/api/bots")).status).toBe(401);
+  });
+});
+
+describe("Bot instructions", () => {
+  test("a Customer gives a Bot instructions, which it gets with every message, and can change or clear them", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+
+    const given = await patchBot(browser, bot, { instructions: "  Answer in French.\nSign off as Scout.  " });
+    expect(given.status).toBe(200);
+    expect(await given.json()).toMatchObject({ bot: { instructions: "Answer in French.\nSign off as Scout." } });
+    expect((await listBots(browser)).find(({ id }) => id === bot.id)).toMatchObject({ instructions: "Answer in French.\nSign off as Scout." });
+    server.openai.replyWith("Bonjour.");
+    await chat(browser, bot, "Hello");
+    expect(server.openai.requests.at(-1)!.instructions).toContain("Answer in French.\nSign off as Scout.");
+
+    expect((await patchBot(browser, bot, { instructions: "" })).status).toBe(200);
+    server.openai.replyWith("Hello.");
+    await chat(browser, bot, "Hello again");
+    expect(server.openai.requests.at(-1)!.instructions).not.toContain("French");
+  });
+
+  test("instructions are text of up to 8,000 characters", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+
+    for (const instructions of ["x".repeat(8_001), 42]) {
+      const refused = await patchBot(browser, bot, { instructions });
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toMatchObject({
+        error: { code: "invalid_instructions", message: "Write instructions of up to 8,000 characters." },
+      });
+    }
+    expect((await patchBot(browser, bot, { instructions: "x".repeat(8_000) })).status).toBe(200);
+  });
+
+  test("a new Bot has none, and renaming it keeps them", async () => {
+    const browser = await signedInBrowser();
+    const bot = await createBot(browser);
+    expect(bot).toMatchObject({ instructions: "" });
+
+    await patchBot(browser, bot, { instructions: "Be brief." });
+    const renamed = await patchBot(browser, bot, { name: "Brief Scout" });
+    expect(await renamed.json()).toMatchObject({ bot: { name: "Brief Scout", instructions: "Be brief." } });
   });
 });
 

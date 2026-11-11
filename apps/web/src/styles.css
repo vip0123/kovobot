@@ -813,7 +813,7 @@ select:disabled {
   margin-left: auto;
 }
 
-.computer-toggle.active {
+.drawer-toggle.active {
   background: var(--accent-soft);
   color: var(--accent);
 }
@@ -1531,8 +1531,8 @@ select:disabled {
   color: var(--danger);
 }
 
-/* A Bot's Computer, in a panel beside its Conversation */
-.computer-drawer {
+/* A panel beside the Conversation: the Bot's Computer, or what the Customer customises */
+.side-drawer {
   flex: none;
   width: 460px;
   overflow-y: auto;
@@ -1540,11 +1540,48 @@ select:disabled {
   background: var(--sidebar);
 }
 
-.computer {
+.computer,
+.drawer-panel {
   display: flex;
   flex-direction: column;
   gap: 16px;
   padding: 14px 20px 24px;
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.drawer-head h2 {
+  margin: 0;
+  font-size: 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.drawer-section p {
+  margin: 0;
+}
+
+.instructions-input {
+  resize: vertical;
+  min-height: 220px;
+  line-height: 1.5;
+}
+
+.counter {
+  align-self: flex-end;
+  font-variant-numeric: tabular-nums;
 }
 
 .computer > p {
@@ -1644,9 +1681,9 @@ select:disabled {
   outline-color: var(--danger);
 }
 
-/* Narrower screens: the Computer panel covers the Conversation until it's closed. */
+/* Narrower screens: the side panel covers the Conversation until it's closed. */
 @media (max-width: 1180px) {
-  .computer-drawer {
+  .side-drawer {
     position: fixed;
     top: 0;
     right: 0;
@@ -1710,9 +1747,23 @@ select:disabled {
     padding: 6px 12px 12px;
   }
 
-  .computer-toggle-label,
   .toggle-label,
   .composer-hint {
+    display: none;
+  }
+
+  /* Out of sight, but still the button's name to a screen reader. */
+  .drawer-toggle-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* Room for the Bot's name: Customize is in the Bot's menu. */
+  .customize-toggle {
     display: none;
   }
 

@@ -26,6 +26,8 @@ export interface Bot {
   model: string;
   /** The model the Bot operates its Computer with; null until the Customer picks one. */
   driverModel: string | null;
+  /** What the Customer tells the Bot about how to work for them; empty for none. */
+  instructions: string;
   createdAt: Date;
 }
 
@@ -63,6 +65,7 @@ export interface Message {
 }
 
 const MAX_NAME_LENGTH = 80;
+const MAX_INSTRUCTIONS_LENGTH = 8_000;
 const MAX_MESSAGE_LENGTH = 20_000;
 /** The most of a conversation's latest messages the model sees. */
 const MESSAGES_SENT_TO_MODEL = 50;
@@ -111,20 +114,26 @@ export function botRoutes(deps: AppDeps) {
     return c.json({ bot }, 201);
   });
 
-  // Renames a Bot, switches its model or its Driver model; its conversation stays as it is.
+  // Renames a Bot, switches its model or Driver model, or changes its instructions; its conversation stays as it is.
   routes.patch("/bots/:id", async (c) => {
     const body = await jsonBody(c);
     const name = body.name === undefined ? undefined : botName(body.name);
     if (name === null) return invalidName(c);
+    const instructions = body.instructions === undefined ? undefined : readInstructions(body.instructions);
+    if (instructions === null) {
+      const limit = MAX_INSTRUCTIONS_LENGTH.toLocaleString("en-US");
+      return apiError(c, 400, "invalid_instructions", `Write instructions of up to ${limit} characters.`);
+    }
     const model = body.model === undefined ? undefined : chooseModel(body.model, deps.models);
     if (model && "code" in model) return apiError(c, 400, model.code, model.message);
     const driver = body.driverModel === undefined || body.driverModel === null ? body.driverModel : chooseDriverModel(body.driverModel, deps.models);
     if (driver && "code" in driver) return apiError(c, 400, driver.code, driver.message);
-    if (name === undefined && model === undefined && driver === undefined) return invalidName(c);
+    if (name === undefined && model === undefined && driver === undefined && instructions === undefined) return invalidName(c);
     const bot = await updateBot(deps.db, c.get("customer").id, c.req.param("id"), {
       name,
       model: model?.id,
       driverModel: driver === undefined ? undefined : (driver?.id ?? null),
+      instructions,
     });
     return bot ? c.json({ bot }) : botNotFound(c);
   });
@@ -229,6 +238,7 @@ export function botRoutes(deps: AppDeps) {
         const tools = driving ? { useComputer: (task: string) => driveComputer(deps, driving, task) } : undefined;
         const task = {
           botName: bot.name,
+          instructions: bot.instructions,
           model: model.id,
           conversation,
           tools,
@@ -335,7 +345,14 @@ function botName(value: unknown): string | null {
   return name.length >= 1 && name.length <= MAX_NAME_LENGTH ? name : null;
 }
 
-const BOT_COLUMNS = `id, name, model, driver_model AS "driverModel", created_at AS "createdAt"`;
+/** A Bot's instructions as given, trimmed; empty clears them. Null if they aren't text that fits. */
+function readInstructions(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const instructions = value.trim();
+  return instructions.length <= MAX_INSTRUCTIONS_LENGTH ? instructions : null;
+}
+
+const BOT_COLUMNS = `id, name, model, driver_model AS "driverModel", instructions, created_at AS "createdAt"`;
 
 async function listBots(db: Db, customerId: string): Promise<Bot[]> {
   const { rows } = await db.query<Bot>(
@@ -366,14 +383,23 @@ async function updateBot(
   db: Db,
   customerId: string,
   botId: string,
-  change: { name: string | undefined; model: string | undefined; driverModel?: string | null },
+  change: { name: string | undefined; model: string | undefined; driverModel?: string | null; instructions?: string },
 ): Promise<Bot | null> {
   if (!UUID_PATTERN.test(botId)) return null;
   const { rows } = await db.query<Bot>(
     `UPDATE bots SET name = COALESCE($3, name), model = COALESCE($4, model),
-       driver_model = CASE WHEN $5 THEN $6 ELSE driver_model END
+       driver_model = CASE WHEN $5 THEN $6 ELSE driver_model END,
+       instructions = COALESCE($7, instructions)
      WHERE id = $1 AND customer_id = $2 RETURNING ${BOT_COLUMNS}`,
-    [botId, customerId, change.name ?? null, change.model ?? null, change.driverModel !== undefined, change.driverModel ?? null],
+    [
+      botId,
+      customerId,
+      change.name ?? null,
+      change.model ?? null,
+      change.driverModel !== undefined,
+      change.driverModel ?? null,
+      change.instructions ?? null,
+    ],
   );
   return rows[0] ?? null;
 }
