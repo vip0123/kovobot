@@ -209,6 +209,32 @@ export async function listApprovals(deps: AppDeps, conversationId: string): Prom
   return rows.map((row) => approvalView(row, now));
 }
 
+/**
+ * What each earlier reply's Task did outside the Bot, for the model: a reply's words alone don't
+ * say whether an action ran, and a Bot that can't tell may do it again. Only what doesn't change
+ * once the reply is saved, so earlier messages stay as they were for the prompt cache: what it
+ * asked the Customer to approve (what they decided comes in its own message), and what ran under
+ * a Pre-approval.
+ */
+export async function actionNotes(db: Db, conversationId: string): Promise<Map<string, string>> {
+  const { rows } = await db.query<Pick<StoredApproval, "messageId" | "tool" | "arguments" | "preApproved" | "state">>(
+    `SELECT message_id::text AS "messageId", tool, arguments, pre_approved AS "preApproved", state
+     FROM approvals WHERE conversation_id = $1 AND message_id IS NOT NULL ORDER BY created_at, id`,
+    [conversationId],
+  );
+  const notes = new Map<string, string[]>();
+  for (const row of rows) {
+    const action = describeAction(row);
+    const note = !row.preApproved
+      ? `Kovobot's record of this reply: you asked the Customer to approve ${action}`
+      : row.state === "failed"
+        ? `Kovobot's record of this reply: under the Customer's Pre-approval, this ran and failed: ${action}`
+        : `Kovobot's record of this reply: under the Customer's Pre-approval, this ran and worked: ${action}`;
+    notes.set(row.messageId!, [...(notes.get(row.messageId!) ?? []), `[${note}]`]);
+  }
+  return new Map([...notes].map(([messageId, lines]) => [messageId, lines.join("\n")]));
+}
+
 /** Ties the Approvals a Task asked for to the reply it saved, so each shows under its reply. */
 export async function attachApprovals(db: Db, conversationId: string, messageId: string, since: Date): Promise<void> {
   await db.query("UPDATE approvals SET message_id = $3 WHERE conversation_id = $1 AND message_id IS NULL AND created_at >= $2", [

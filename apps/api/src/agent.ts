@@ -137,6 +137,7 @@ export async function* runTask(
     botName: task.botName,
     instructions: task.instructions,
     hasComputer: task.tools?.useComputer !== undefined,
+    hasConnectedTools: (task.tools?.connected?.length ?? 0) > 0,
     skills,
     notes: task.tools?.notes?.list,
   });
@@ -315,6 +316,8 @@ function botInstructions(task: {
   botName: string;
   instructions?: string;
   hasComputer: boolean;
+  /** It has tools from servers or apps, whose earlier actions it knows only from Kovobot's record. */
+  hasConnectedTools: boolean;
   skills: SkillSummary[];
   notes?: Array<Pick<Note, "id" | "content">>;
 }): string {
@@ -325,6 +328,13 @@ function botInstructions(task: {
       "Answer clearly and briefly, and say so when you don't know something.",
       ...(task.hasComputer
         ? ["You have a Computer, a Linux desktop with Firefox: use use_computer for anything that needs a browser or desktop apps."]
+        : []),
+      ...(task.hasConnectedTools
+        ? [
+            "Earlier replies show only what you wrote, not your tool calls. What your tools did outside the Bot then is in " +
+              "Kovobot's record, in brackets at the end of each reply: it is accurate, so take it as done, and never do an " +
+              "action again because you can't see its tool call.",
+          ]
         : []),
     ].join(" "),
   ];

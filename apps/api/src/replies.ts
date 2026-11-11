@@ -1,6 +1,6 @@
 import { runTask } from "./agent.ts";
 import type { AppDeps } from "./app.ts";
-import { approvalDesk, attachApprovals } from "./approvals.ts";
+import { actionNotes, approvalDesk, attachApprovals } from "./approvals.ts";
 import { conversationForModel } from "./attachments.ts";
 import { addMessage, recentMessages, RENEW_REPLY_CLAIM_MS, renewReplying, stopReplying } from "./conversations.ts";
 import { driveComputer, drivingFor } from "./driver.ts";
@@ -58,6 +58,12 @@ export async function runReply(deps: AppDeps, reply: Reply, emit: ReplyEvents): 
   try {
     const recent = await recentMessages(deps.db, conversationId);
     const conversation = await conversationForModel(deps.db, recent, { pdfs: !MODEL_PROVIDERS_WITHOUT_PDFS.has(model.provider) });
+    // Each earlier reply carries what its Task did outside the Bot, so the model never does it twice.
+    const acted = await actionNotes(deps.db, conversationId);
+    recent.forEach((message, index) => {
+      const note = acted.get(message.id);
+      if (note && conversation[index]) conversation[index].content = `${conversation[index].content}\n\n${note}`;
+    });
     // The newest message says when it is on the Customer's clock, and whether a schedule sent it.
     // Only the newest: earlier ones stay as they were, so Model providers read them from their cache.
     const newest = conversation.at(-1);
