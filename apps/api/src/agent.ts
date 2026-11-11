@@ -1,6 +1,6 @@
 import type { Approval, ApprovalDesk } from "./approvals.ts";
 import type { TaskEvent } from "./driver.ts";
-import type { ConnectedTool } from "./mcp.ts";
+import type { ConnectedTool, PreparedAction } from "./actions.ts";
 import type { ChatMessage, ConversationItem, FunctionTool, ModelAdapter, ThinkingEffort, ToolCall } from "./models/adapter.ts";
 import type { Note, Notebook } from "./notes.ts";
 import type { ScheduleBook } from "./schedules.ts";
@@ -89,6 +89,8 @@ export interface TaskTools {
   schedules?: ScheduleBook;
   /** Tools from servers and apps the Customer connected to the Bot. What they return is Outside content. */
   connected?: ConnectedTool[];
+  /** Present when the Bot has Connected apps: finds what they can do, from Composio's own list. */
+  appCatalog?: { tool: FunctionTool; find: (input: Record<string, unknown>) => Promise<string> };
   /** Where a connected tool that does more than read asks for the Customer's Approval. */
   approvals?: ApprovalDesk;
 }
@@ -130,6 +132,7 @@ export async function* runTask(
     ...(skills.length > 0 ? [readSkillTool(skills.map((skill) => skill.name))] : []),
     ...(task.tools?.notes ? [NOTE_TOOL] : []),
     ...(task.tools?.schedules ? [SCHEDULE_TOOL] : []),
+    ...(task.tools?.appCatalog ? [task.tools.appCatalog.tool] : []),
     ...(task.tools?.connected ?? []).map(({ tool }) => tool),
   ];
   const tools = offered.length > 0 ? offered : undefined;
@@ -191,14 +194,27 @@ async function* runTool(call: ToolCall, task: { botName: string; tools?: TaskToo
   if (call.name === "read_skill" && skills) return yield* readSkill(call, task.botName, skills);
   if (notes && call.name === NOTE_TOOL.name) return yield* writeNote(call, task.botName, notes.book, state);
   if (schedules && call.name === SCHEDULE_TOOL.name) return yield* useSchedules(call, task.botName, schedules, state);
+  const catalog = task.tools?.appCatalog;
+  if (catalog && call.name === catalog.tool.name) {
+    // Composio's own list of what its apps can do: not Outside content.
+    yield { type: "status", text: `${task.botName} is looking through its Connected apps.` };
+    return await catalog.find(call.input);
+  }
   const connected = task.tools?.connected?.find(({ tool }) => tool.name === call.name);
-  if (connected && connected.kind !== "read") return yield* askToAct(call, connected, task, state);
   if (connected) {
+    let prepared: PreparedAction | string;
+    try {
+      prepared = await connected.prepare(call.input);
+    } catch (error) {
+      return `That tool failed: ${(error as Error).message}`;
+    }
+    if (typeof prepared === "string") return prepared;
+    if (prepared.kind !== "read") return yield* askToAct(prepared, task, state);
     // Whatever an outside server or app sends back is Outside content.
     state.readOutsideContent = true;
-    yield { type: "status", text: connected.status };
+    yield { type: "status", text: prepared.status };
     try {
-      return await connected.call(call.input);
+      return await prepared.run();
     } catch (error) {
       return `That tool failed: ${(error as Error).message}`;
     }
@@ -210,15 +226,10 @@ async function* runTool(call: ToolCall, task: { botName: string; tools?: TaskToo
  * A connected tool that sends, changes, deletes or pays: it waits for the Customer's Approval of
  * exactly this action, unless a Pre-approval covers it and the Task hasn't read Outside content.
  */
-async function* askToAct(
-  call: ToolCall,
-  connected: ConnectedTool,
-  task: { botName: string; tools?: TaskTools },
-  state: TaskState,
-): AsyncGenerator<AgentEvent, string> {
+async function* askToAct(prepared: PreparedAction, task: { botName: string; tools?: TaskTools }, state: TaskState): AsyncGenerator<AgentEvent, string> {
   const desk = task.tools?.approvals;
-  if (!desk || connected.kind === "read") return "That tool needs the Customer's Approval, which can't be asked for here.";
-  const { approval, output } = await desk.ask(connected.action, connected.kind, call.input, { preApprovalsSuspended: state.readOutsideContent });
+  if (!desk || prepared.kind === "read") return "That tool needs the Customer's Approval, which can't be asked for here.";
+  const { approval, output } = await desk.ask(prepared.action, prepared.kind, prepared.input, { preApprovalsSuspended: state.readOutsideContent });
   yield { type: "approval", approval };
   if (approval.preApproved) {
     // It ran, and what it returned is Outside content.

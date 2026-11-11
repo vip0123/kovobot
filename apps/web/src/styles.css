@@ -2376,6 +2376,77 @@ select:disabled {
   }
 }
 
+/* Connected apps: the Customer's, and the catalogue to connect more from */
+.apps {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.apps-heading {
+  margin: 12px 0 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.app-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.app-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+}
+
+.app-row + .app-row {
+  border-top: 1px solid var(--border);
+}
+
+.app-initial {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.app-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-wrap: anywhere;
+}
+
+.app-row-name {
+  font-weight: 600;
+}
+
+.badge.failed {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+@media (max-width: 560px) {
+  .app-row {
+    flex-wrap: wrap;
+  }
+}
+
 /* The Tools tab: MCP servers and their tools, and the Bot's Pre-approvals */
 .drawer-subhead {
   margin: 12px 0 0;

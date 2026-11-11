@@ -5,6 +5,7 @@ import type { Config } from "@kovobot/config";
 import type { Db } from "@kovobot/db";
 import { authRoutes } from "./auth/routes.ts";
 import { botRoutes } from "./bots.ts";
+import type { Composio } from "./composio.ts";
 import type { ComputerService } from "./computers.ts";
 import { apiError, sameOriginWrites } from "./http.ts";
 import { leadRoutes } from "./leads.ts";
@@ -23,6 +24,8 @@ export interface AppDeps {
   models: ModelAdapters;
   /** The Computer service; null leaves Computers off. */
   computers: ComputerService | null;
+  /** Composio, for Connected apps; null leaves them off. */
+  composio: Composio | null;
   now: () => Date;
 }
 

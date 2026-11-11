@@ -32,7 +32,7 @@ Kovobot chats on the Channels you already use, works on its own cloud Computer, 
 | Computers | Self-hosted: a Linux desktop per Bot in local Docker. The Bot uses it through a Driver model (OpenAI, Anthropic or Google); you watch live and can take over, and the Bot waits |
 | Waitlist | Early-access landing page with a waitlist and a one-time launch email |
 
-Coming next: Own keys, Credit and metering, Telegram, Discord and Slack, Connected apps, and cloud Computers. See the [roadmap](#roadmap).
+Coming next: Own keys, Credit and metering, Telegram, Discord and Slack, and cloud Computers. See the [roadmap](#roadmap).
 
 ## Self-host in five minutes
 
@@ -89,7 +89,7 @@ TypeScript end to end, Postgres as the only database, and tests that run against
 - [ ] Telegram, Discord and Slack
 - [x] MCP servers: connect one to a Bot, sign in with OAuth, and its read-only tools run at once
 - [x] Approvals on the web: an action that sends, changes, deletes or pays waits for yours, and Pre-approvals cover one kind of action on one tool (never paying)
-- [ ] Connected apps
+- [x] Connected apps through Composio: connect accounts on its hosted sign-in, several to an app, and give each to the Bots you choose
 - [x] Memory: notes each Bot keeps, which you read and edit
 - [x] Schedules: once, daily, weekdays, weekly or monthly, in your time zone
 - [x] Linux Computers in local Docker, watched live (self-hosted)

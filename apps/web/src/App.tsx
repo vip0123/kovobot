@@ -4,6 +4,7 @@ import { BotsPage } from "./pages/BotsPage.tsx";
 import { ConfirmSignInPage } from "./pages/ConfirmSignInPage.tsx";
 import { NewBotPage } from "./pages/NewBotPage.tsx";
 import { SignInPage } from "./pages/SignInPage.tsx";
+import { AppsPage } from "./pages/AppsPage.tsx";
 import { SkillPage, SkillsPage } from "./pages/SkillsPage.tsx";
 
 export function App() {
@@ -16,6 +17,7 @@ export function App() {
         <Route path="/bots" element={<BotsPage />} />
         <Route path="/bots/new" element={<NewBotPage />} />
         <Route path="/bots/:id" element={<BotPage />} />
+        <Route path="/apps" element={<AppsPage />} />
         <Route path="/skills" element={<SkillsPage />} />
         <Route path="/skills/:id" element={<SkillPage />} />
         <Route path="*" element={<NotFoundPage />} />

@@ -14,7 +14,7 @@ import {
   StreamableHTTPClientTransport,
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
-import { type ActionKind, actionKind, type ActionOutcome, type ActionTool } from "./actions.ts";
+import { type ActionKind, actionKind, type ActionOutcome, type ActionTool, type ConnectedTool } from "./actions.ts";
 import type { AppDeps } from "./app.ts";
 import { type Customer, ownBotOnly } from "./customers.ts";
 import { apiError, jsonBody, UUID_PATTERN } from "./http.ts";
@@ -61,17 +61,6 @@ export interface McpServerView {
   tools: Array<Pick<McpTool, "name" | "description" | "readOnly"> & { kind: ActionKind }>;
 }
 
-/** One of the Bot's tools from a connected app or server, for its Task. */
-export interface ConnectedTool {
-  tool: FunctionTool;
-  /** What the Customer sees while it runs. */
-  status: string;
-  /** Reads run at once; any other kind waits for the Customer's Approval, unless a Pre-approval covers it. */
-  kind: ActionKind;
-  /** The tool as Approvals know it, and how to run it once approved. */
-  action: ActionTool;
-  call: (input: Record<string, unknown>) => Promise<string>;
-}
 
 /** The way to a server; hosted, every request and redirect goes only to public addresses. */
 function transportTo(deps: AppDeps, server: StoredServer, auth: StoredOAuth): StreamableHTTPClientTransport {
@@ -190,12 +179,16 @@ export async function mcpTools(deps: AppDeps, botId: string, botName: string): P
       taken.add(name);
       const kind = actionKind(tool);
       const asks = kind === "read" ? "" : " It may wait for the Customer's Approval.";
+      const action: ActionTool = { key: `mcp:${server.id}:${tool.name}`, label, name: tool.name, ref: { source: "mcp", serverId: server.id, tool: tool.name } };
       tools.push({
         tool: { name, description: `${tool.description} (A tool of ${label}, an MCP server.${asks})`.trim(), parameters: tool.inputSchema },
-        status: `${botName} is using ${label}: ${tool.name}.`,
-        kind,
-        action: { key: `mcp:${server.id}:${tool.name}`, label, name: tool.name, ref: { source: "mcp", serverId: server.id, tool: tool.name } },
-        call: async (input) => (await callTool(deps, server, tool.name, input)).output,
+        prepare: async (input) => ({
+          kind,
+          action,
+          input,
+          status: `${botName} is using ${label}: ${tool.name}.`,
+          run: async () => (await callTool(deps, server, tool.name, input)).output,
+        }),
       });
     }
   }

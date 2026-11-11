@@ -1,10 +1,31 @@
 // What a Bot's tools do outside it, which decides whether an action waits for an Approval (ticket 18).
+import type { FunctionTool } from "./models/adapter.ts";
 
 /** What a tool does outside the Bot. Reads run at once; the other kinds wait for an Approval. */
 export type ActionKind = "read" | "send" | "change" | "delete" | "pay";
 
 /** How to run a tool again later, once the Customer approves. */
-export type ActionRef = { source: "mcp"; serverId: string; tool: string };
+export type ActionRef = { source: "mcp"; serverId: string; tool: string } | { source: "composio"; appId: string; tool: string };
+
+/** One of the Bot's tools from a connected server or app, for its Task. What it returns is Outside content. */
+export interface ConnectedTool {
+  tool: FunctionTool;
+  /**
+   * Makes one call ready: what kind of action it is, exactly what would run, and how to run it
+   * now; or why it can't, in words for the model.
+   */
+  prepare(input: Record<string, unknown>): Promise<PreparedAction | string>;
+}
+
+/** One call to a connected tool, ready: a read runs at once; anything else goes through Approvals. */
+export interface PreparedAction {
+  kind: ActionKind;
+  action: ActionTool;
+  input: Record<string, unknown>;
+  /** What the Customer sees while it runs. */
+  status: string;
+  run(): Promise<string>;
+}
 
 /** One tool, as Approvals and Pre-approvals know it. */
 export interface ActionTool {

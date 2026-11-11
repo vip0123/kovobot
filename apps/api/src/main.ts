@@ -2,6 +2,7 @@ import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net";
 import { serve } from "@hono/node-server";
 import { createDb } from "@kovobot/db";
 import { type AppDeps, createApp } from "./app.ts";
+import { createComposioClient } from "./composio.ts";
 import { createComputerServiceClient } from "./computers.ts";
 import { configOrExit } from "./config-or-exit.ts";
 import { createMailer } from "./mailer.ts";
@@ -27,6 +28,7 @@ const deps: AppDeps = {
   fetch: globalThis.fetch,
   models: createModelAdapters(config),
   computers: config.computerService ? createComputerServiceClient(config.computerService) : null,
+  composio: config.composio ? createComposioClient({ apiKey: config.composio.apiKey }) : null,
   now: () => new Date(),
 };
 const app = createApp(deps);

@@ -5,6 +5,7 @@ import { type Db, transaction } from "@kovobot/db";
 import type { AppDeps } from "./app.ts";
 import { approvalView, carryOut, decideApproval, decisionMessage, listApprovals, preApprovalRoutes } from "./approvals.ts";
 import { findAttachment, readAttachments, saveAttachments } from "./attachments.ts";
+import { appRoutes } from "./composio.ts";
 import { sessionCustomer } from "./auth/sessions.ts";
 import { computerRoutes, computerSizes, deleteBotComputer } from "./computer-routes.ts";
 import { addMessage, listMessages, type Message, startReplying, stopReplying, webConversation } from "./conversations.ts";
@@ -52,7 +53,7 @@ const MAX_MESSAGE_LENGTH = 20_000;
 export function botRoutes(deps: AppDeps) {
   const routes = new Hono<{ Variables: { customer: Customer } }>();
 
-  for (const path of ["/models", "/computer-sizes", "/bots", "/bots/*", "/skills", "/skills/*", "/mcp/*"]) {
+  for (const path of ["/models", "/computer-sizes", "/bots", "/bots/*", "/skills", "/skills/*", "/mcp/*", "/apps", "/apps/*"]) {
     routes.use(path, async (c, next) => {
       const customer = await sessionCustomer(c, deps);
       if (!customer) return apiError(c, 401, "signed_out", "Sign in to continue.");
@@ -124,6 +125,7 @@ export function botRoutes(deps: AppDeps) {
   routes.route("/bots/:id/schedules", scheduleRoutes(deps));
   routes.route("/", mcpRoutes(deps));
   routes.route("/bots/:id/pre-approvals", preApprovalRoutes(deps));
+  routes.route("/", appRoutes(deps));
 
   // The Conversation, and each action its Bot asked to take, shown under the reply that asked.
   routes.get("/bots/:id/messages", async (c) => {
